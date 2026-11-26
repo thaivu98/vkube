@@ -160,5 +160,6 @@ type NodeFacts struct {
 	DefaultInterface string `json:"defaultInterface"` // card mạng default route (dùng cho kube-vip)
 	CPUCores         int    `json:"cpuCores"`
 	MemoryMB         int    `json:"memoryMB"`
+	HasZstd          bool   `json:"hasZstd"`        // kiểm tra có sẵn zstd trên node hay không
 	HasGoldenImage   bool   `json:"hasGoldenImage"` // sẵn sàng cho v0.3 (Packer Golden Image)
 }

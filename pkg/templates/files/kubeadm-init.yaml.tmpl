@@ -1,0 +1,35 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "{{ .AdvertiseAddress }}"
+  bindPort: 6443
+nodeRegistration:
+  name: "{{ .NodeName }}"
+  criSocket: "unix:///run/containerd/containerd.sock"
+  imagePullPolicy: Never
+{{- if .CertificateKey }}
+certificateKey: "{{ .CertificateKey }}"
+{{- end }}
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: "{{ .KubernetesVersion }}"
+clusterName: "{{ .ClusterName }}"
+{{- if .ControlPlaneEndpoint }}
+controlPlaneEndpoint: "{{ .ControlPlaneEndpoint }}"
+{{- end }}
+imageRepository: "registry.k8s.io"
+networking:
+  podSubnet: "{{ .PodSubnet }}"
+  serviceSubnet: "{{ .ServiceSubnet }}"
+{{- if .CertSANs }}
+apiServer:
+  certSANs:
+{{- range .CertSANs }}
+    - "{{ . }}"
+{{- end }}
+{{- end }}
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd

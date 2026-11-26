@@ -2,12 +2,15 @@
 
 ## Current Status / Handover
 - **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1)
-- **Giai đoạn hiện tại:** Hoàn tất **Phase 3 / Task 6 (`pkg/ssh`)** — Sẵn sàng bắt đầu **Phase 4 (Task 7–10: Cluster Provisioning Engine)**
-- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Phase 4)
+- **Giai đoạn hiện tại:** Hoàn tất **Phase 4 (Task 7–10: `pkg/templates` & `pkg/engine`)** — Sẵn sàng bắt đầu **Phase 5 / Task 11 (Kiểm thử E2E trên 2 VM thật `Master` & `Worker`)**
+- **Task đang thực hiện:** Chưa có (sẵn sàng chạy E2E trên lab VM)
 - **Vừa hoàn thành:**
-  - Push commit Phase 2 (`29d5fd1`) lên `origin/main`.
-  - Hoàn thành **Task 6 (`pkg/ssh`)**: SSH client Pure Go (`client.go` hỗ trợ private key + password + keyboard-interactive, `sudo -S` qua stdin không lộ mật khẩu, SFTP upload/write), parallel execution pool (`pool.go`), embedded HTTP `BundleServer` có token bảo mật + tự tìm IP LAN (`http_dist.go`), kèm unit tests và cross-compile 6 nền tảng pass 100%.
-- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 4 (`pkg/templates` & `pkg/engine`, Task 7–10)** — Nhúng template (`containerd`, `kubelet.service`, `kubeadm-config`, `kube-vip`), implement `preflight` (thu thập & cache `NodeFacts` 1 lần duy nhất) → `os-prep` → `runtime & ctr images import` → `kubeadm init/join` → cài **Calico** offline, `vkube status` và `vkube reset`, rồi test E2E trực tiếp trên 2 VM lab `Master` & `Worker`!
+  - Push commit `77b6ef9` (`clusters/cluster_template.yaml`, `Taints`, check VIP trùng IP node & `allowSchedulingOnControlPlane`).
+  - Hoàn thành trọn bộ **Phase 4 (`pkg/templates` & `pkg/engine`)**:
+    - Nhúng toàn bộ template (`containerd.service`, `kubelet.service`, `10-kubeadm.conf`, `crictl.yaml`, `kubeadm-init.yaml` v1beta4, `kube-vip.yaml`) bằng `//go:embed` trong `pkg/templates`.
+    - Implement `preflight` (thu thập & cache `NodeFacts` đúng 1 lần duy nhất, kiểm tra OS/Arch khớp bundle, chống trùng IP VIP trong LAN), `os-prep` (tự động set hostname, đồng bộ `/etc/hosts`, tắt swap, kernel modules & sysctl), `runtime` (đẩy & giải nén bundle có fallback Pure Go nếu thiếu `zstd`, cài `containerd` `SystemdCgroup=true`, nạp OCI images song song bằng `ctr`), `kubeadm init/join` (tuần tự CP phụ cho `etcd` Raft HA + song song Worker + `kube-vip` tự đổi `super-admin.conf` -> `admin.conf`), cài **Calico** offline, áp dụng `labels`/`taints`, lấy `kubeconfig`, `vkube status` và `vkube reset`.
+    - Toàn bộ 7 Go package pass unit test 100% và cross-compile 6 nền tảng thành công.
+- **Bước tiếp theo (Next Action):** Commit + push **Phase 4**, sau đó thực hiện **Phase 5 / Task 11** — Build Offline Bundle ARM64 thật, bật 2 VM `Master` & `Worker` và chạy `vkube apply` kiểm thử E2E đo tốc độ triển khai thực tế!
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -50,10 +53,10 @@
 ---
 
 ## Phase 4: Engine triển khai cụm (`pkg/engine`)
-- [ ] **Task 7:** Implement giai đoạn `preflight` (kiểm tra Ubuntu 22.04/24.04, khớp kiến trúc với bundle, quyền root/sudo, CPU/RAM/port) và `os-prep` (tắt swap, bật kernel modules `overlay` & `br_netfilter`, cấu hình `sysctl`).
-- [ ] **Task 8:** Implement giai đoạn cài đặt `runtime` & `artifacts` (giải nén binary, cấu hình `containerd` với `SystemdCgroup = true`, tạo systemd service cho `kubelet`, nạp image song song bằng `ctr -n k8s.io images import`).
-- [ ] **Task 9:** Implement `kubeadm init` (Primary Control Plane + `kube-vip` static pod cho HA) và `kubeadm join` song song (Secondary Control Planes + Worker Nodes).
-- [ ] **Task 10:** Implement cài đặt **Calico** CNI offline, tự động lấy `kubeconfig`, cùng các lệnh `vkube status` và `vkube reset`.
+- [x] **Task 7:** Implement giai đoạn `preflight` (kiểm tra Ubuntu 22.04/24.04, khớp kiến trúc với bundle, quyền root/sudo, CPU/RAM/port) và `os-prep` (tắt swap, bật kernel modules `overlay` & `br_netfilter`, cấu hình `sysctl`).
+- [x] **Task 8:** Implement giai đoạn cài đặt `runtime` & `artifacts` (giải nén binary, cấu hình `containerd` với `SystemdCgroup = true`, tạo systemd service cho `kubelet`, nạp image song song bằng `ctr -n k8s.io images import`).
+- [x] **Task 9:** Implement `kubeadm init` (Primary Control Plane + `kube-vip` static pod cho HA) và `kubeadm join` song song (Secondary Control Planes + Worker Nodes).
+- [x] **Task 10:** Implement cài đặt **Calico** CNI offline, tự động lấy `kubeconfig`, cùng các lệnh `vkube status` và `vkube reset`.
 
 ---
 
