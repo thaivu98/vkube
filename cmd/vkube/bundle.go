@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/thaivu98/vkube/pkg/api"
+	"github.com/thaivu98/vkube/pkg/bundle"
 	"github.com/thaivu98/vkube/pkg/versions"
 )
 
@@ -68,7 +69,9 @@ func newBundleBuildCmd() *cobra.Command {
 				return nil
 			}
 
-			return fmt.Errorf("bundle build execution chưa được kích hoạt (sẽ hoàn thiện trong Phase 2 / Task 3–4); dùng --dry-run để xem kế hoạch tải")
+			builder := bundle.NewBuilder(out)
+			_, err = builder.Build(cmd.Context(), resolved, outputPath)
+			return err
 		},
 	}
 
@@ -86,10 +89,17 @@ func newBundleVerifyCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bundleFile := args[0]
-			if _, err := os.Stat(bundleFile); err != nil {
-				return fmt.Errorf("cannot access bundle %q: %w", bundleFile, err)
+			manifest, err := bundle.Verify(bundleFile)
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("bundle verify sẽ được hoàn thiện trong Phase 2 / Task 5")
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Bundle hợp lệ (SHA256 OK): %s\n", bundleFile)
+			fmt.Fprintf(out, "  Release Tag: %s\n", manifest.ReleaseTag)
+			fmt.Fprintf(out, "  Kubernetes:  %s\n", manifest.KubernetesVersion)
+			fmt.Fprintf(out, "  Arch:        linux/%s\n", manifest.Arch)
+			fmt.Fprintf(out, "  Files:       %d file(s) đã xác thực\n", len(manifest.Files))
+			return nil
 		},
 	}
 	return cmd

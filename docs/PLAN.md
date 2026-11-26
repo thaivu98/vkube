@@ -2,12 +2,16 @@
 
 ## Current Status / Handover
 - **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1)
-- **Giai đoạn hiện tại:** Hoàn tất **Phase 1 (Task 1 & Task 2)** — Sẵn sàng bắt đầu **Phase 2 / Task 3**
-- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Task 3)
+- **Giai đoạn hiện tại:** Hoàn tất **Phase 2 (Task 3–5: Offline Bundle Builder)** — Sẵn sàng bắt đầu **Phase 3 / Task 6**
+- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Task 6)
 - **Vừa hoàn thành:**
-  - Push commit Phase 0 + Task 1 (`8d1e2e5`) lên `origin/main`.
-  - Hoàn thành **Task 2**: Dựng khung CLI Cobra đầy đủ trong `cmd/vkube` (`version`, `init-config`, `bundle build --manifest --dry-run`, `bundle export-manifest`, `bundle verify`, `apply --dry-run`, `status`, `reset`) và các file mẫu trong `examples/cluster-single.yaml`, `examples/cluster-ha.yaml`. Toàn bộ unit test và cross-compile 6 nền tảng đều pass.
-- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 2 / Task 3** — Implement bộ tải binary & manifest đa kiến trúc bằng Pure Go HTTP trong `pkg/bundle`, có log tiến độ và kiểm tra SHA256 (`--arch amd64|arm64`).
+  - Push commit Task 2 (`6ccdcd6`) lên `origin/main` (kèm `NodeFacts` cache model & tự động nhận diện `arch`).
+  - Hoàn thành trọn bộ **Phase 2 (`pkg/bundle`)**:
+    - Bộ tải binary/tarball/manifest Pure Go HTTP có retry, kiểm tra SHA256 và giải nén `.tar.gz` chống Zip-Slip (`downloader.go`).
+    - Bộ pull & export OCI images Pure Go bằng `go-containerregistry` cho `linux/amd64` và `linux/arm64`, không cần Docker daemon (`images.go`).
+    - Bộ đóng gói `.tar.zst` kèm `bundle-manifest.json` và lệnh `vkube bundle verify` phát hiện sửa đổi/lỗi checksum (`packager.go`, `builder.go`).
+    - Toàn bộ unit test và cross-compile 6 nền tảng pass 100%.
+- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 3 / Task 6** — Implement tầng SSH client pool Pure Go (`pkg/ssh`) hỗ trợ private key & password, xử lý `sudo`, thực thi lệnh song song và truyền Offline Bundle (SFTP + tùy chọn HTTP server nội bộ) — sau đó có thể test SSH trực tiếp lên 2 VM `Master` và `Worker` của lab.
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -38,9 +42,9 @@
 ---
 
 ## Phase 2: Công cụ đóng gói Offline Bundle (`vkube bundle`)
-- [ ] **Task 3:** Implement bộ tải binary và manifest đa kiến trúc bằng Pure Go HTTP, có log tiến độ và kiểm tra SHA256 (`--arch amd64|arm64`).
-- [ ] **Task 4:** Implement bộ pull & export OCI container images bằng Pure Go theo kiến trúc `linux/<arch>` (không cần cài Docker daemon trên máy build) và đóng gói `.tar.zst` kèm `bundle-manifest.json`.
-- [ ] **Task 5:** Implement `vkube bundle verify` và viết unit/integration test kiểm tra tính toàn vẹn của Offline Bundle.
+- [x] **Task 3:** Implement bộ tải binary và manifest đa kiến trúc bằng Pure Go HTTP, có log tiến độ và kiểm tra SHA256 (`--arch amd64|arm64`).
+- [x] **Task 4:** Implement bộ pull & export OCI container images bằng Pure Go theo kiến trúc `linux/<arch>` (không cần cài Docker daemon trên máy build) và đóng gói `.tar.zst` kèm `bundle-manifest.json`.
+- [x] **Task 5:** Implement `vkube bundle verify` và viết unit/integration test kiểm tra tính toàn vẹn của Offline Bundle.
 
 ---
 
