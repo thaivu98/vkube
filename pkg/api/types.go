@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 )
 
@@ -9,6 +10,7 @@ const (
 	DefaultAPIVersion = "vkube.io/v1alpha1"
 	DefaultKind       = "Cluster"
 
+	ArchAuto  = "auto"
 	ArchAMD64 = "amd64"
 	ArchARM64 = "arm64"
 
@@ -24,7 +26,17 @@ const (
 	DefaultSSHUser       = "root"
 )
 
-// ValidateArch kiểm tra kiến trúc đích có được vkube hỗ trợ hay không (amd64 hoặc arm64).
+// DefaultLocalArch trả về kiến trúc của máy đang chạy CLI (amd64/arm64), fallback về amd64.
+func DefaultLocalArch() string {
+	switch runtime.GOARCH {
+	case ArchAMD64, ArchARM64:
+		return runtime.GOARCH
+	default:
+		return ArchAMD64
+	}
+}
+
+// ValidateArch kiểm tra kiến trúc đích cụ thể có được vkube hỗ trợ hay không (amd64 hoặc arm64).
 func ValidateArch(arch string) error {
 	switch arch {
 	case ArchAMD64, ArchARM64:
@@ -32,6 +44,14 @@ func ValidateArch(arch string) error {
 	default:
 		return fmt.Errorf("unsupported target architecture %q (supported: %s, %s)", arch, ArchAMD64, ArchARM64)
 	}
+}
+
+// ValidateClusterArch kiểm tra trường spec.arch trong cluster.yaml (chấp nhận auto, amd64, arm64).
+func ValidateClusterArch(arch string) error {
+	if arch == ArchAuto {
+		return nil
+	}
+	return ValidateArch(arch)
 }
 
 // ClusterConfig đại diện cho cấu hình cụm khai báo trong file cluster.yaml.
@@ -110,4 +130,20 @@ type BundleFile struct {
 	Path   string `json:"path" yaml:"path"`
 	SHA256 string `json:"sha256" yaml:"sha256"`
 	Size   int64  `json:"size" yaml:"size"`
+}
+
+// NodeFacts lưu thông tin hệ thống thu thập đúng một lần ở bước preflight cho mỗi Target Node,
+// giúp các giai đoạn tiếp theo tái sử dụng ngay trong bộ nhớ mà không cần SSH kiểm tra lại.
+type NodeFacts struct {
+	NodeName         string `json:"nodeName"`
+	Host             string `json:"host"`
+	OSID             string `json:"osId"`             // ví dụ: "ubuntu"
+	OSVersion        string `json:"osVersion"`        // ví dụ: "24.04"
+	Arch             string `json:"arch"`             // chuẩn hóa: "amd64" hoặc "arm64"
+	KernelVersion    string `json:"kernelVersion"`    // ví dụ: "6.8.0-45-generic"
+	Hostname         string `json:"hostname"`         // hostname thực tế hiện tại trên OS
+	DefaultInterface string `json:"defaultInterface"` // card mạng default route (dùng cho kube-vip)
+	CPUCores         int    `json:"cpuCores"`
+	MemoryMB         int    `json:"memoryMB"`
+	HasGoldenImage   bool   `json:"hasGoldenImage"` // sẵn sàng cho v0.3 (Packer Golden Image)
 }

@@ -47,6 +47,25 @@ spec:
 	}
 }
 
+func TestParseClusterConfig_AutoArchDefault(t *testing.T) {
+	raw := `
+spec:
+  ssh:
+    password: "test-pass"
+  nodes:
+    - name: cp-1
+      host: 192.0.2.10
+      role: control-plane
+`
+	cfg, err := ParseClusterConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("expected valid config with omitted arch, got error: %v", err)
+	}
+	if cfg.Spec.Arch != ArchAuto {
+		t.Errorf("expected default spec.arch %q, got %q", ArchAuto, cfg.Spec.Arch)
+	}
+}
+
 func TestParseClusterConfig_ValidHA(t *testing.T) {
 	raw := `
 apiVersion: vkube.io/v1alpha1

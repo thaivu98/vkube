@@ -61,7 +61,7 @@ Chạy từ máy Deployer tới các Target Nodes qua giao thức SSH (Pure Go).
 ```mermaid
 flowchart TD
     A["vkube apply -f cluster.yaml --bundle <file.tar.zst>"] --> B["Validate cấu hình & Kiểm tra SHA256/Arch của Bundle"]
-    B --> C["Preflight song song (OS, Arch, Root/Sudo, Ports, RAM)"]
+    B --> C["Preflight song song (Thu thập & cache NodeFacts: OS, Arch, NIC, CPU/RAM, Ports)"]
     C --> D["OS Prep song song (Tắt swap, kernel modules, sysctl)"]
     D --> E["Đồng bộ & Giải nén Bundle song song (SFTP / Local HTTP)"]
     E --> F["Cài đặt Runtime song song (containerd + kubelet + ctr images import)"]

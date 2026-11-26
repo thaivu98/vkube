@@ -43,6 +43,9 @@ func (c *ClusterConfig) ApplyDefaults() {
 	if c.Metadata.Name == "" {
 		c.Metadata.Name = "vkube-cluster"
 	}
+	if c.Spec.Arch == "" {
+		c.Spec.Arch = ArchAuto
+	}
 	if c.Spec.Networking.PodSubnet == "" {
 		c.Spec.Networking.PodSubnet = DefaultPodSubnet
 	}
@@ -73,7 +76,7 @@ func (c *ClusterConfig) Validate() error {
 	if strings.TrimSpace(c.Metadata.Name) == "" {
 		errs = append(errs, "metadata.name is required")
 	}
-	if err := ValidateArch(c.Spec.Arch); err != nil {
+	if err := ValidateClusterArch(c.Spec.Arch); err != nil {
 		errs = append(errs, fmt.Sprintf("spec.arch: %v", err))
 	}
 

@@ -2,16 +2,18 @@ package main
 
 import (
 	"fmt"
-	"runtime"
+	"os"
 )
 
 var (
-	version = "v1.32.2-vkube.1-dev"
+	version = "dev"
 	commit  = "none"
 	date    = "unknown"
 )
 
 func main() {
-	fmt.Printf("vkube %s (commit: %s, built: %s, %s/%s)\n",
-		version, commit, date, runtime.GOOS, runtime.GOARCH)
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }

@@ -2,12 +2,12 @@
 
 ## Current Status / Handover
 - **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1)
-- **Giai đoạn hiện tại:** Hoàn tất **Phase 1 / Task 1** — Sẵn sàng bắt đầu **Phase 1 / Task 2**
-- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Task 2)
+- **Giai đoạn hiện tại:** Hoàn tất **Phase 1 (Task 1 & Task 2)** — Sẵn sàng bắt đầu **Phase 2 / Task 3**
+- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Task 3)
 - **Vừa hoàn thành:**
-  - Tạo script cài đặt công cụ tiên quyết `scripts/init-common.sh` và cập nhật hướng dẫn build trong `README.md`.
-  - Hoàn thành **Task 1**: `pkg/api` (`ClusterConfig`, `BundleManifest`, validation + defaults) và `pkg/versions` (BOM `versions.yaml` nhúng sẵn qua `//go:embed`, hỗ trợ override `--manifest`, render URL & OCI images cho `amd64`/`arm64`) kèm unit tests pass 100% và cross-compile 6 nền tảng thành công.
-- **Bước tiếp theo (Next Action):** Bắt đầu **Task 2** — Dựng khung CLI bằng Cobra trong `cmd/vkube` (`version`, `init-config`, `bundle build --manifest`, `bundle export-manifest`, `bundle verify`, `apply`, `status`, `reset`) và các file cấu hình mẫu trong `examples/`.
+  - Push commit Phase 0 + Task 1 (`8d1e2e5`) lên `origin/main`.
+  - Hoàn thành **Task 2**: Dựng khung CLI Cobra đầy đủ trong `cmd/vkube` (`version`, `init-config`, `bundle build --manifest --dry-run`, `bundle export-manifest`, `bundle verify`, `apply --dry-run`, `status`, `reset`) và các file mẫu trong `examples/cluster-single.yaml`, `examples/cluster-ha.yaml`. Toàn bộ unit test và cross-compile 6 nền tảng đều pass.
+- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 2 / Task 3** — Implement bộ tải binary & manifest đa kiến trúc bằng Pure Go HTTP trong `pkg/bundle`, có log tiến độ và kiểm tra SHA256 (`--arch amd64|arm64`).
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -33,7 +33,7 @@
 
 ## Phase 1: Schema lõi, Ma trận phiên bản & Khung CLI
 - [x] **Task 1:** Implement `pkg/api` (`ClusterConfig` cho `cluster.yaml`, `BundleManifest`, validation chặt chẽ, giá trị mặc định) và `pkg/versions` (cơ chế BOM đọc từ `pkg/versions/versions.yaml` nhúng sẵn bằng `//go:embed`, hỗ trợ override từ file ngoài qua `--manifest`, tuyệt đối không hardcode version/URL trong code Go, hỗ trợ cả `amd64`/`arm64`) + unit tests.
-- [ ] **Task 2:** Dựng khung CLI bằng Cobra trong `cmd/vkube` (`version`, `init-config`, `bundle build --manifest`, `bundle verify`, `apply`, `status`, `reset`) và các file cấu hình mẫu trong `examples/`.
+- [x] **Task 2:** Dựng khung CLI bằng Cobra trong `cmd/vkube` (`version`, `init-config`, `bundle build --manifest`, `bundle export-manifest`, `bundle verify`, `apply`, `status`, `reset`) và các file cấu hình mẫu trong `examples/`.
 
 ---
 
