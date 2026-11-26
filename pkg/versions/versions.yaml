@@ -1,0 +1,95 @@
+# vkube Bill of Materials (BOM) mặc định.
+# Tuyệt đối không hardcode version/URL trong mã nguồn Go — mọi phiên bản đều được quản lý tại đây.
+# Người dùng có thể sao chép file này, chỉnh sửa bất kỳ phiên bản nào và truyền qua cờ --manifest.
+
+releaseTag: v1.32.2-vkube.1
+
+components:
+  kubernetes: v1.32.2
+  containerd: 1.7.25
+  runc: v1.2.4
+  cni_plugins: v1.6.2
+  crictl: v1.32.0
+  calico: v3.29.2
+  kube_vip: v0.8.9
+  coredns: v1.11.3
+  pause: "3.10"
+  etcd: 3.5.16-0
+
+artifacts:
+  - name: kubeadm
+    component: kubernetes
+    type: binary
+    url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubeadm
+    sha256Url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubeadm.sha256
+    dest: bin/kubeadm
+
+  - name: kubelet
+    component: kubernetes
+    type: binary
+    url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubelet
+    sha256Url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubelet.sha256
+    dest: bin/kubelet
+
+  - name: kubectl
+    component: kubernetes
+    type: binary
+    url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubectl
+    sha256Url: https://dl.k8s.io/release/{{.Version}}/bin/linux/{{.Arch}}/kubectl.sha256
+    dest: bin/kubectl
+
+  - name: containerd
+    component: containerd
+    type: tarball
+    url: https://github.com/containerd/containerd/releases/download/v{{.Version}}/containerd-{{.Version}}-linux-{{.Arch}}.tar.gz
+    sha256Url: https://github.com/containerd/containerd/releases/download/v{{.Version}}/containerd-{{.Version}}-linux-{{.Arch}}.tar.gz.sha256sum
+    dest: bin
+
+  - name: runc
+    component: runc
+    type: binary
+    url: https://github.com/opencontainers/runc/releases/download/{{.Version}}/runc.{{.Arch}}
+    dest: bin/runc
+
+  - name: cni-plugins
+    component: cni_plugins
+    type: tarball
+    url: https://github.com/containernetworking/plugins/releases/download/{{.Version}}/cni-plugins-linux-{{.Arch}}-{{.Version}}.tgz
+    sha256Url: https://github.com/containernetworking/plugins/releases/download/{{.Version}}/cni-plugins-linux-{{.Arch}}-{{.Version}}.tgz.sha256
+    dest: cni-plugins
+
+  - name: crictl
+    component: crictl
+    type: tarball
+    url: https://github.com/kubernetes-sigs/cri-tools/releases/download/{{.Version}}/crictl-{{.Version}}-linux-{{.Arch}}.tar.gz
+    dest: bin
+
+  - name: calico-manifest
+    component: calico
+    type: manifest
+    url: https://raw.githubusercontent.com/projectcalico/calico/{{.Version}}/manifests/calico.yaml
+    dest: manifests/calico.yaml
+
+imageGroups:
+  - name: kubernetes
+    dest: images/kubernetes.tar
+    images:
+      - registry.k8s.io/kube-apiserver:{{.Components.kubernetes}}
+      - registry.k8s.io/kube-controller-manager:{{.Components.kubernetes}}
+      - registry.k8s.io/kube-scheduler:{{.Components.kubernetes}}
+      - registry.k8s.io/kube-proxy:{{.Components.kubernetes}}
+      - registry.k8s.io/coredns/coredns:{{.Components.coredns}}
+      - registry.k8s.io/pause:{{.Components.pause}}
+      - registry.k8s.io/etcd:{{.Components.etcd}}
+
+  - name: calico
+    dest: images/calico.tar
+    images:
+      - docker.io/calico/cni:{{.Components.calico}}
+      - docker.io/calico/node:{{.Components.calico}}
+      - docker.io/calico/kube-controllers:{{.Components.calico}}
+
+  - name: kube-vip
+    dest: images/kube-vip.tar
+    images:
+      - ghcr.io/kube-vip/kube-vip:{{.Components.kube_vip}}
