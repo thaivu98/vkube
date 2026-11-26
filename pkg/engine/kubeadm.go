@@ -120,6 +120,10 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 	if isHA {
 		initCmd += " --upload-certs"
 	}
+	// Trên VM 2GB ARM64, MemTotal khả dụng thường ~1600MB (< ngưỡng mặc định 1700MB của kubeadm).
+	if f := state.Facts[cp1.Name]; f != nil && f.MemoryMB > 0 && f.MemoryMB < 1750 {
+		initCmd += " --ignore-preflight-errors=Mem"
+	}
 	if _, err := cp1Runner.RunSudo(ctx, initCmd); err != nil {
 		return fmt.Errorf("kubeadm init on %s: %w", cp1.Name, err)
 	}

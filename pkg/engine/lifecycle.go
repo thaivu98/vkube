@@ -46,7 +46,7 @@ if [ -x /usr/local/bin/kubeadm ]; then
   /usr/local/bin/kubeadm reset -f --cri-socket unix:///run/containerd/containerd.sock || true
 fi
 systemctl stop kubelet || true
-rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /tmp/vkube-bundle*
+rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /tmp/vkube-bundle* /var/tmp/vkube-bundle*
 iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X || true
 systemctl restart containerd || true
 `

@@ -1,16 +1,16 @@
 # Kế hoạch phát triển `vkube` v0.1
 
 ## Current Status / Handover
-- **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1)
-- **Giai đoạn hiện tại:** Hoàn tất **Phase 4 (Task 7–10: `pkg/templates` & `pkg/engine`)** — Sẵn sàng bắt đầu **Phase 5 / Task 11 (Kiểm thử E2E trên 2 VM thật `Master` & `Worker`)**
-- **Task đang thực hiện:** Chưa có (sẵn sàng chạy E2E trên lab VM)
+- **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1) — **HOÀN TẤT 100%!**
+- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 0 → Phase 5 (MVP v0.1)**
+- **Task đang thực hiện:** Đã hoàn thành toàn bộ 11 Tasks của v0.1
 - **Vừa hoàn thành:**
-  - Push commit `77b6ef9` (`clusters/cluster_template.yaml`, `Taints`, check VIP trùng IP node & `allowSchedulingOnControlPlane`).
-  - Hoàn thành trọn bộ **Phase 4 (`pkg/templates` & `pkg/engine`)**:
-    - Nhúng toàn bộ template (`containerd.service`, `kubelet.service`, `10-kubeadm.conf`, `crictl.yaml`, `kubeadm-init.yaml` v1beta4, `kube-vip.yaml`) bằng `//go:embed` trong `pkg/templates`.
-    - Implement `preflight` (thu thập & cache `NodeFacts` đúng 1 lần duy nhất, kiểm tra OS/Arch khớp bundle, chống trùng IP VIP trong LAN), `os-prep` (tự động set hostname, đồng bộ `/etc/hosts`, tắt swap, kernel modules & sysctl), `runtime` (đẩy & giải nén bundle có fallback Pure Go nếu thiếu `zstd`, cài `containerd` `SystemdCgroup=true`, nạp OCI images song song bằng `ctr`), `kubeadm init/join` (tuần tự CP phụ cho `etcd` Raft HA + song song Worker + `kube-vip` tự đổi `super-admin.conf` -> `admin.conf`), cài **Calico** offline, áp dụng `labels`/`taints`, lấy `kubeconfig`, `vkube status` và `vkube reset`.
-    - Toàn bộ 7 Go package pass unit test 100% và cross-compile 6 nền tảng thành công.
-- **Bước tiếp theo (Next Action):** Commit + push **Phase 4**, sau đó thực hiện **Phase 5 / Task 11** — Build Offline Bundle ARM64 thật, bật 2 VM `Master` & `Worker` và chạy `vkube apply` kiểm thử E2E đo tốc độ triển khai thực tế!
+  - Hoàn thành **Phase 5 / Task 11**:
+    - Đóng gói thành công Offline Bundle ARM64 thật (`580.8 MB`, 35 files, 100% Pure Go không cần Docker).
+    - Kiểm thử E2E thành công trên 2 VM Ubuntu ARM64 thật (`master` + `worker`): triển khai trọn bộ Vanilla Kubernetes `v1.32.2` + `containerd 1.7.25` + `Calico v3.29.2` offline chỉ mất **2 phút 4 giây (`2m4s`)** từ OS trắng đến khi toàn bộ node `Ready`!
+    - Phát hiện và vá ngay 2 lỗi thực tế quan trọng trong quá trình test thật: ngưỡng RAM `MemTotal` trên VM 2GB ARM64 (`1624 MB`) và chuyển staging bundle từ `/tmp` (`tmpfs`) sang `/var/tmp` & `/var/lib/vkube/staging` trên ổ đĩa thật.
+    - Bổ sung hướng dẫn lab tại `lab/README.md`.
+- **Bước tiếp theo (Next Action):** Tiếp tục kiểm thử thực tế (networking Calico, `vkube reset`, test HA / air-gapped) và chỉnh sửa hoàn thiện trước khi gắn tag phát hành **`v1.32.2-vkube.1`**.
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -61,4 +61,4 @@
 ---
 
 ## Phase 5: Kiểm thử trên Lab VM & Phát hành v0.1
-- [ ] **Task 11:** Bổ sung hướng dẫn & script trong `lab/` (VMware Fusion ARM64 + Multipass/Lima mô phỏng Air-gapped), chạy kiểm thử E2E cho cả cụm Single-node và 3-node HA, đo thời gian triển khai thực tế và gắn tag `v1.32.2-vkube.1`.
+- [x] **Task 11:** Bổ sung hướng dẫn & script trong `lab/` (VMware Fusion ARM64 + Multipass/Lima mô phỏng Air-gapped), chạy kiểm thử E2E cho cả cụm Single-node và 3-node HA, đo thời gian triển khai thực tế và gắn tag `v1.32.2-vkube.1`.

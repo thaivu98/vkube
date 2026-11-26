@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	remoteWorkDir      = "/tmp/vkube-bundle"
-	remoteManifestDir  = "/etc/vkube/manifests"
-	remoteImageDir     = "/var/lib/vkube/images"
+	// Dùng /var/lib/vkube và /var/tmp (luôn nằm trên ổ đĩa thật, tránh /tmp là tmpfs giới hạn RAM trên Ubuntu mới).
+	remoteWorkDir     = "/var/lib/vkube/staging"
+	remoteManifestDir = "/etc/vkube/manifests"
+	remoteImageDir    = "/var/lib/vkube/images"
 )
 
 // RunRuntimeAndArtifacts đồng bộ Offline Bundle, giải nén binaries, cấu hình containerd (SystemdCgroup=true),
@@ -54,11 +55,11 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 		useZstd := facts != nil && facts.HasZstd
 
 		localUpload := state.BundlePath
-		remoteArchive := "/tmp/vkube-bundle.tar.zst"
+		remoteArchive := "/var/tmp/vkube-bundle.tar.zst"
 		extractCmd := fmt.Sprintf("tar --zstd -xf %s -C %s", remoteArchive, remoteWorkDir)
 		if !useZstd {
 			localUpload = plainTarPath
-			remoteArchive = "/tmp/vkube-bundle.tar"
+			remoteArchive = "/var/tmp/vkube-bundle.tar"
 			extractCmd = fmt.Sprintf("tar -xf %s -C %s", remoteArchive, remoteWorkDir)
 		}
 
@@ -82,7 +83,7 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 		}
 
 		installScript := fmt.Sprintf(`set -euo pipefail
-rm -rf %s && mkdir -p %s /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/systemd/system/kubelet.service.d
+rm -rf %s /tmp/vkube-bundle* && mkdir -p %s /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/systemd/system/kubelet.service.d
 %s
 rm -f %s
 
@@ -94,7 +95,7 @@ if [ -d %s/manifests ]; then
   cp -f %s/manifests/* %s/
 fi
 if [ -d %s/images ]; then
-  cp -f %s/images/*.tar %s/
+  mv -f %s/images/*.tar %s/
 fi
 
 mv -f /tmp/vkube-containerd.service /etc/systemd/system/containerd.service
@@ -110,13 +111,14 @@ systemctl daemon-reload
 systemctl enable --now containerd
 systemctl enable kubelet
 
-# Nạp toàn bộ OCI images vào namespace k8s.io của containerd
+# Nạp toàn bộ OCI images vào namespace k8s.io của containerd (xóa file tar ngay sau khi nạp để tiết kiệm đĩa)
 for img_tar in %s/*.tar; do
   [ -f "$img_tar" ] || continue
   /usr/local/bin/ctr -n k8s.io images import "$img_tar" >/dev/null
+  rm -f "$img_tar"
 done
 
-rm -rf %s
+rm -rf %s /tmp/vkube-bundle*
 `,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir, remoteImageDir,
 			extractCmd, remoteArchive,

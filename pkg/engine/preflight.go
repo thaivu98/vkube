@@ -148,8 +148,9 @@ func validateNodeFacts(node api.NodeConfig, facts *api.NodeFacts, cfg *api.Clust
 		if facts.CPUCores < 2 {
 			return fmt.Errorf("control-plane requires at least 2 vCPUs (detected %d)", facts.CPUCores)
 		}
-		if facts.MemoryMB > 0 && facts.MemoryMB < 1700 {
-			return fmt.Errorf("control-plane requires at least 1700 MB RAM (detected %d MB)", facts.MemoryMB)
+		// VM 2GB trên ARM64 thường có MemTotal khả dụng khoảng ~1600 MB sau khi kernel giữ chỗ.
+		if facts.MemoryMB > 0 && facts.MemoryMB < 1500 {
+			return fmt.Errorf("control-plane requires at least 1500 MB usable RAM (detected %d MB)", facts.MemoryMB)
 		}
 	}
 	return nil
