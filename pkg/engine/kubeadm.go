@@ -180,17 +180,24 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 		CertificateKey:       certKey,
 		CertSANs:             certSANs,
 		ImagePullPolicy:      pullPolicy,
+		ImageRepository:      state.Config.Spec.Registry.ImageRepository,
 	})
 	if err != nil {
 		return fmt.Errorf("render kubeadm-init.yaml: %w", err)
 	}
 
-	if err := cp1Runner.WriteFile(ctx, initYAML, "/tmp/vkube-kubeadm-init.yaml", 0o600); err != nil {
+	if err := cp1Runner.WriteFile(ctx, initYAML, ".vkube-tmp/kubeadm-init.yaml", 0o600); err != nil {
 		return err
 	}
 
+	cp1User := state.Config.EffectiveSSH(cp1).User
 	fmt.Fprintf(e.Out, "==> [4/6] Khởi tạo Primary Control Plane (%s @ %s)...\n", cp1.Name, cp1.Host)
-	initCmd := "mkdir -p /etc/vkube && mv -f /tmp/vkube-kubeadm-init.yaml /etc/vkube/kubeadm-init.yaml && /usr/local/bin/kubeadm init --config=/etc/vkube/kubeadm-init.yaml"
+	initCmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p -m 0700 /etc/vkube
+install -m 0600 "$USER_HOME/.vkube-tmp/kubeadm-init.yaml" /etc/vkube/kubeadm-init.yaml
+rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
+/usr/local/bin/kubeadm init --config=/etc/vkube/kubeadm-init.yaml`, cp1User)
 	if isHA {
 		initCmd += " --upload-certs"
 	}
@@ -288,10 +295,15 @@ func (e *Engine) writeKubeVipManifest(ctx context.Context, state *ClusterState, 
 	if err != nil {
 		return err
 	}
-	if err := r.WriteFile(ctx, manifestBytes, "/tmp/vkube-kube-vip.yaml", 0o600); err != nil {
+	if err := r.WriteFile(ctx, manifestBytes, ".vkube-tmp/kube-vip.yaml", 0o600); err != nil {
 		return err
 	}
-	_, err = r.RunSudo(ctx, "mkdir -p /etc/kubernetes/manifests && mv -f /tmp/vkube-kube-vip.yaml /etc/kubernetes/manifests/kube-vip.yaml")
+	sshUser := state.Config.EffectiveSSH(node).User
+	_, err = r.RunSudo(ctx, fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p /etc/kubernetes/manifests
+install -m 0600 "$USER_HOME/.vkube-tmp/kube-vip.yaml" /etc/kubernetes/manifests/kube-vip.yaml
+rm -f "$USER_HOME/.vkube-tmp/kube-vip.yaml"`, sshUser))
 	return err
 }
 
@@ -307,14 +319,15 @@ func (e *Engine) runCalicoAndPostConfig(ctx context.Context, state *ClusterState
 		return err
 	}
 
-	// Patch Calico manifest tại chỗ trên CP-1 để khớp PodSubnet và imagePullPolicy: IfNotPresent (100% offline)
+	// Apply Calico manifest và ép CALICO_IPV4POOL_CIDR trực tiếp bằng kubectl set env (tránh lỗi sed âm thầm khi đổi version)
 	calicoScript := fmt.Sprintf(`set -euo pipefail
 CALICO_FILE="%s/calico.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$CALICO_FILE"
 sed -i 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|g' "$CALICO_FILE"
 sed -i 's|#   value: "192.168.0.0/16"|  value: "%s"|g' "$CALICO_FILE"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$CALICO_FILE"
-`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet)
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system set env daemonset/calico-node CALICO_IPV4POOL_CIDR=%q
+`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
 
 	if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
 		return fmt.Errorf("apply offline Calico CNI: %w", err)

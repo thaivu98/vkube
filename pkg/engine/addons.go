@@ -86,18 +86,20 @@ spec:
     - vkube-default-pool
 `, addons.MetalLB.IPRange)
 
-		if err := cp1Runner.WriteFile(ctx, []byte(poolManifest), "/tmp/vkube-metallb-pool.yaml", 0o644); err != nil {
+		if err := cp1Runner.WriteFile(ctx, []byte(poolManifest), ".vkube-tmp/metallb-pool.yaml", 0o600); err != nil {
 			return err
 		}
 
+		cp1User := state.Config.EffectiveSSH(cp1).User
 		script := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
 F="%s/metallb-native.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$F"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n metallb-system rollout status deployment/controller --timeout=120s
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f /tmp/vkube-metallb-pool.yaml
-rm -f /tmp/vkube-metallb-pool.yaml
-`, remoteManifestDir)
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$USER_HOME/.vkube-tmp/metallb-pool.yaml"
+rm -f "$USER_HOME/.vkube-tmp/metallb-pool.yaml"
+`, cp1User, remoteManifestDir)
 		if _, err := cp1Runner.RunSudo(ctx, script); err != nil {
 			return fmt.Errorf("install metallb addon: %w", err)
 		}
@@ -117,18 +119,22 @@ sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
 	}
 
 	// 5. Custom Manifests do người dùng khai báo thêm trong cluster.yaml
+	cp1User := state.Config.EffectiveSSH(cp1).User
 	for i, localPath := range addons.CustomManifests {
 		data, err := os.ReadFile(localPath)
 		if err != nil {
 			return fmt.Errorf("read custom manifest %q: %w", localPath, err)
 		}
 		base := filepath.Base(localPath)
-		remoteTmp := fmt.Sprintf("/tmp/vkube-custom-%d-%s", i, base)
+		relTmp := fmt.Sprintf(".vkube-tmp/custom-%d-%s", i, base)
 		fmt.Fprintf(e.Out, "  [custom]    applying %s...\n", localPath)
-		if err := cp1Runner.WriteFile(ctx, data, remoteTmp, 0o644); err != nil {
+		if err := cp1Runner.WriteFile(ctx, data, relTmp, 0o600); err != nil {
 			return fmt.Errorf("upload custom manifest %q: %w", localPath, err)
 		}
-		cmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f %s && rm -f %s", remoteTmp, remoteTmp)
+		cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$USER_HOME/%s"
+rm -f "$USER_HOME/%s"`, cp1User, relTmp, relTmp)
 		if _, err := cp1Runner.RunSudo(ctx, cmd); err != nil {
 			return fmt.Errorf("apply custom manifest %q: %w", localPath, err)
 		}
@@ -153,8 +159,8 @@ func renderRegistryHostsToml(m api.RegistryMirror, remoteCAPath string) string {
 	return b.String()
 }
 
-// configureRegistryMirrors cấu hình /etc/containerd/certs.d trên một Target Node.
-func configureRegistryMirrors(ctx context.Context, mirrors []api.RegistryMirror, r ssh.Runner) error {
+// configureRegistryMirrors cấu hình /etc/containerd/certs.d trên một Target Node qua thư mục riêng .vkube-tmp.
+func configureRegistryMirrors(ctx context.Context, mirrors []api.RegistryMirror, r ssh.Runner, sshUser string) error {
 	for i, m := range mirrors {
 		var remoteCAPath string
 		if m.CACertPath != "" {
@@ -162,22 +168,31 @@ func configureRegistryMirrors(ctx context.Context, mirrors []api.RegistryMirror,
 			if err != nil {
 				return fmt.Errorf("read registry CA cert %q for %s: %w", m.CACertPath, m.Host, err)
 			}
-			tmpCA := fmt.Sprintf("/tmp/vkube-reg-ca-%d.crt", i)
-			if err := r.WriteFile(ctx, caBytes, tmpCA, 0o644); err != nil {
+			relCA := fmt.Sprintf(".vkube-tmp/reg-ca-%d.crt", i)
+			if err := r.WriteFile(ctx, caBytes, relCA, 0o600); err != nil {
 				return err
 			}
 			remoteCAPath = fmt.Sprintf("/etc/containerd/certs.d/%s/ca.crt", m.Host)
-			if _, err := r.RunSudo(ctx, fmt.Sprintf("mkdir -p /etc/containerd/certs.d/%s && mv -f %s %s", m.Host, tmpCA, remoteCAPath)); err != nil {
+			cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p /etc/containerd/certs.d/%s
+install -m 0644 "$USER_HOME/%s" %s
+rm -f "$USER_HOME/%s"`, sshUser, m.Host, relCA, remoteCAPath, relCA)
+			if _, err := r.RunSudo(ctx, cmd); err != nil {
 				return err
 			}
 		}
 
 		tomlContent := renderRegistryHostsToml(m, remoteCAPath)
-		tmpToml := fmt.Sprintf("/tmp/vkube-reg-hosts-%d.toml", i)
-		if err := r.WriteFile(ctx, []byte(tomlContent), tmpToml, 0o644); err != nil {
+		relToml := fmt.Sprintf(".vkube-tmp/reg-hosts-%d.toml", i)
+		if err := r.WriteFile(ctx, []byte(tomlContent), relToml, 0o600); err != nil {
 			return err
 		}
-		cmd := fmt.Sprintf("mkdir -p /etc/containerd/certs.d/%s && mv -f %s /etc/containerd/certs.d/%s/hosts.toml", m.Host, tmpToml, m.Host)
+		cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p /etc/containerd/certs.d/%s
+install -m 0644 "$USER_HOME/%s" /etc/containerd/certs.d/%s/hosts.toml
+rm -f "$USER_HOME/%s"`, sshUser, m.Host, relToml, m.Host, relToml)
 		if _, err := r.RunSudo(ctx, cmd); err != nil {
 			return fmt.Errorf("configure registry mirror %s: %w", m.Host, err)
 		}

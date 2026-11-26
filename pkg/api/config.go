@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// dns1123SubdomainRe kiểm tra tên node hợp lệ theo chuẩn Kubernetes DNS-1123 (chữ thường, số, '-', '.').
+var dns1123SubdomainRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+var safeShellTokenRe = regexp.MustCompile(`^[a-zA-Z0-9._/@:-]+$`)
 
 // LoadClusterConfig đọc, áp dụng giá trị mặc định và validate file cluster.yaml từ đĩa.
 func LoadClusterConfig(filePath string) (*ClusterConfig, error) {
@@ -61,6 +66,20 @@ func (c *ClusterConfig) ApplyDefaults() {
 	if c.Spec.SSH.User == "" {
 		c.Spec.SSH.User = DefaultSSHUser
 	}
+	// Hỗ trợ đọc mật khẩu SSH/Sudo từ biến môi trường để không phải lưu plaintext trong cluster.yaml.
+	if c.Spec.SSH.Password == "" {
+		if envPass := os.Getenv("VKUBE_SSH_PASSWORD"); envPass != "" {
+			c.Spec.SSH.Password = envPass
+		}
+	}
+	if c.Spec.SSH.SudoPassword == "" {
+		if envSudo := os.Getenv("VKUBE_SUDO_PASSWORD"); envSudo != "" {
+			c.Spec.SSH.SudoPassword = envSudo
+		}
+	}
+	if c.Spec.Registry.ImageRepository == "" {
+		c.Spec.Registry.ImageRepository = "registry.k8s.io"
+	}
 	if c.Spec.ControlPlaneEndpoint == "" && c.Spec.VIP != "" {
 		c.Spec.ControlPlaneEndpoint = net.JoinHostPort(c.Spec.VIP, "6443")
 	}
@@ -110,6 +129,9 @@ func (c *ClusterConfig) Validate() error {
 		if strings.TrimSpace(n.Name) == "" {
 			errs = append(errs, fmt.Sprintf("%s.name is required", prefix))
 		} else {
+			if len(n.Name) > 253 || !dns1123SubdomainRe.MatchString(n.Name) {
+				errs = append(errs, fmt.Sprintf("%s.name %q must be a valid lowercase DNS-1123 name (a-z, 0-9, '-', '.')", prefix, n.Name))
+			}
 			if _, dup := seenNames[n.Name]; dup {
 				errs = append(errs, fmt.Sprintf("%s.name %q is duplicated (each Kubernetes node must have a unique name)", prefix, n.Name))
 			}
@@ -134,11 +156,20 @@ func (c *ClusterConfig) Validate() error {
 		}
 
 		effSSH := c.EffectiveSSH(n)
+		if !safeShellTokenRe.MatchString(effSSH.User) {
+			errs = append(errs, fmt.Sprintf("%s.user %q contains invalid characters", prefix, effSSH.User))
+		}
 		if effSSH.Port < 1 || effSSH.Port > 65535 {
 			errs = append(errs, fmt.Sprintf("%s.port %d must be between 1 and 65535", prefix, effSSH.Port))
 		}
-		if effSSH.PrivateKeyPath == "" && effSSH.Password == "" {
-			errs = append(errs, fmt.Sprintf("%s (%s): SSH authentication required (set privateKeyPath or password on node or spec.ssh)", prefix, n.Name))
+		if effSSH.PrivateKeyPath == "" && effSSH.Password == "" && os.Getenv("SSH_AUTH_SOCK") == "" {
+			errs = append(errs, fmt.Sprintf("%s (%s): SSH authentication required (set privateKeyPath, password, VKUBE_SSH_PASSWORD, or SSH_AUTH_SOCK)", prefix, n.Name))
+		}
+
+		for k, v := range n.Labels {
+			if !safeShellTokenRe.MatchString(k) || !safeShellTokenRe.MatchString(v) {
+				errs = append(errs, fmt.Sprintf("%s.labels[%q]=%q contains invalid characters", prefix, k, v))
+			}
 		}
 
 		for j, taint := range n.Taints {

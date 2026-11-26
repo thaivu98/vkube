@@ -16,13 +16,15 @@
 
 ---
 
-## Tốc độ triển khai thực tế (Benchmark)
+## Tốc độ triển khai thực tế (Lab Benchmark)
 
-| Quy mô cụm (Ubuntu OS trắng, LAN 1Gbps, đã có Offline Bundle)         | Thời gian `vkube apply`              | So với Kubespray |
-| :-------------------------------------------------------------------- | :----------------------------------- | :--------------- |
-| **2 nodes** (1 CP + 1 Worker, K8s `v1.32.2` + Calico)                 | **2 phút 4 giây** _(đã đo thực tế)_  | ~15–20 phút      |
-| **3 nodes** (1 CP + 2 Workers + đủ Kong, MetalLB, Metrics, LocalPath) | **2 phút 29 giây** _(đã đo thực tế)_ | ~20–30 phút      |
-| **5 nodes HA** (3 CP `kube-vip` + 2 Workers + đủ 4 Addons)            | **~3.5 – 4.5 phút** _(ước lượng)_    | ~25–40 phút      |
+_Đo trực tiếp trên cụm lab VMware Fusion ARM64 (Ubuntu 26.10, 2 vCPU / 2 GB RAM / node, LAN 1Gbps). Các tính năng vòng đời Day-2 (`upgrade`, `add-node`, `etcd backup/restore`) nằm trong lộ trình v0.2–v0.5._
+
+| Quy mô cụm                                                         | Chế độ           | Thời gian `vkube apply`               |
+| :----------------------------------------------------------------- | :--------------- | :------------------------------------ |
+| **2 nodes** (1 CP + 1 Worker, K8s `v1.32.2` + Calico)              | Offline Bundle   | **2 phút 4 giây** _(đã đo thực tế)_   |
+| **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Offline Bundle   | **2 phút 29 giây** _(đã đo thực tế)_  |
+| **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Online trực tiếp | **~2 phút 20 giây** _(đã đo thực tế)_ |
 
 ---
 

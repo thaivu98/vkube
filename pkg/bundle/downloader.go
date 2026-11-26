@@ -40,7 +40,7 @@ func downloadArtifact(ctx context.Context, client *http.Client, art versions.Res
 	}
 
 	if art.SHA256URL != "" {
-		expectedSHA, err := fetchSHA256(ctx, client, art.SHA256URL)
+		expectedSHA, err := fetchSHA256(ctx, client, art.SHA256URL, path.Base(art.URL))
 		if err != nil {
 			return fmt.Errorf("fetch sha256 for %q: %w", art.Name, err)
 		}
@@ -117,7 +117,7 @@ func fetchFileOnce(ctx context.Context, client *http.Client, url, destPath strin
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func fetchSHA256(ctx context.Context, client *http.Client, shaURL string) (string, error) {
+func fetchSHA256(ctx context.Context, client *http.Client, shaURL, targetFileName string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, shaURL, nil)
 	if err != nil {
 		return "", err
@@ -131,15 +131,32 @@ func fetchSHA256(ctx context.Context, client *http.Client, shaURL string) (strin
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, shaURL)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return "", err
 	}
-	fields := strings.Fields(strings.TrimSpace(string(body)))
-	if len(fields) == 0 || len(fields[0]) != 64 {
-		return "", fmt.Errorf("invalid sha256 payload from %s: %q", shaURL, strings.TrimSpace(string(body)))
+
+	var firstValid string
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 || len(fields[0]) != 64 {
+			continue
+		}
+		hash := strings.ToLower(fields[0])
+		if firstValid == "" {
+			firstValid = hash
+		}
+		if len(fields) >= 2 && targetFileName != "" {
+			fname := strings.TrimPrefix(fields[1], "*")
+			if path.Base(fname) == targetFileName {
+				return hash, nil
+			}
+		}
 	}
-	return strings.ToLower(fields[0]), nil
+	if firstValid != "" {
+		return firstValid, nil
+	}
+	return "", fmt.Errorf("invalid sha256 payload from %s: %q", shaURL, strings.TrimSpace(string(body)))
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

@@ -18,7 +18,7 @@ clusterName: "{{ .ClusterName }}"
 {{- if .ControlPlaneEndpoint }}
 controlPlaneEndpoint: "{{ .ControlPlaneEndpoint }}"
 {{- end }}
-imageRepository: "registry.k8s.io"
+imageRepository: "{{ .ImageRepository }}"
 networking:
   podSubnet: "{{ .PodSubnet }}"
   serviceSubnet: "{{ .ServiceSubnet }}"

@@ -43,14 +43,40 @@ fi
 
 BIN_NAME="vkube-${OS}-${ARCH}"
 URL="https://github.com/${REPO}/releases/download/${TAG}/${BIN_NAME}"
+SHA_URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS"
 
-TMP_FILE="$(mktemp)"
-trap 'rm -f "$TMP_FILE"' EXIT
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_FILE="${TMP_DIR}/${BIN_NAME}"
+SHA_FILE="${TMP_DIR}/SHA256SUMS"
 
 echo "Đang tải vkube ${TAG} (${OS}/${ARCH}) từ ${URL}..."
 curl -fsSL "$URL" -o "$TMP_FILE"
-chmod +x "$TMP_FILE"
 
+echo "Đang xác thực SHA256SUMS..."
+curl -fsSL "$SHA_URL" -o "$SHA_FILE"
+EXPECTED_SHA="$(awk -v f="$BIN_NAME" '$2 == f { print $1; exit }' "$SHA_FILE")"
+if [ -z "$EXPECTED_SHA" ]; then
+  echo "Lỗi: Không tìm thấy checksum cho ${BIN_NAME} trong SHA256SUMS." >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA="$(sha256sum "$TMP_FILE" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA="$(shasum -a 256 "$TMP_FILE" | awk '{print $1}')"
+else
+  echo "Lỗi: Không tìm thấy sha256sum hoặc shasum để kiểm tra toàn vẹn binary." >&2
+  exit 1
+fi
+
+if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+  echo "Lỗi: SHA256 không khớp cho ${BIN_NAME}! Expected=${EXPECTED_SHA}, Got=${ACTUAL_SHA}" >&2
+  exit 1
+fi
+echo "Xác thực SHA256 OK (${ACTUAL_SHA})"
+
+chmod +x "$TMP_FILE"
 mkdir -p "$INSTALL_DIR"
 mv "$TMP_FILE" "${INSTALL_DIR}/vkube"
 

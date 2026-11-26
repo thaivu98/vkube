@@ -96,9 +96,11 @@ type ClusterSpec struct {
 	Nodes []NodeConfig `yaml:"nodes" json:"nodes"`
 }
 
-// RegistryConfig khai báo danh sách Private Registry Mirror (ví dụ Harbor, Nexus nội bộ).
+// RegistryConfig khai báo Private Registry Mirror (Harbor/Nexus) và ImageRepository cho kubeadm.
 type RegistryConfig struct {
-	Mirrors []RegistryMirror `yaml:"mirrors,omitempty" json:"mirrors,omitempty"`
+	// ImageRepository ghi đè registry.k8s.io khi cài kubeadm (hữu ích cho mirror nội bộ tại VN/Enterprise).
+	ImageRepository string           `yaml:"imageRepository,omitempty" json:"imageRepository,omitempty"`
+	Mirrors         []RegistryMirror `yaml:"mirrors,omitempty" json:"mirrors,omitempty"`
 }
 
 // RegistryMirror cấu hình 1 registry mirror trong /etc/containerd/certs.d/<host>/hosts.toml.
@@ -136,13 +138,16 @@ type NetworkingConfig struct {
 	CNI           string `yaml:"cni,omitempty" json:"cni,omitempty"`
 }
 
-// SSHConfig chứa thông tin xác thực và kết nối SSH (hỗ trợ cả key và password).
+// SSHConfig chứa thông tin xác thực và kết nối SSH (hỗ trợ SSH agent, private key có/không passphrase và password).
 type SSHConfig struct {
-	User           string `yaml:"user,omitempty" json:"user,omitempty"`
-	Port           int    `yaml:"port,omitempty" json:"port,omitempty"`
-	PrivateKeyPath string `yaml:"privateKeyPath,omitempty" json:"privateKeyPath,omitempty"`
-	Password       string `yaml:"password,omitempty" json:"password,omitempty"`
-	SudoPassword   string `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
+	User                  string `yaml:"user,omitempty" json:"user,omitempty"`
+	Port                  int    `yaml:"port,omitempty" json:"port,omitempty"`
+	PrivateKeyPath        string `yaml:"privateKeyPath,omitempty" json:"privateKeyPath,omitempty"`
+	PrivateKeyPassphrase  string `yaml:"privateKeyPassphrase,omitempty" json:"privateKeyPassphrase,omitempty"`
+	Password              string `yaml:"password,omitempty" json:"password,omitempty"`
+	SudoPassword          string `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
+	KnownHostsPath        string `yaml:"knownHostsPath,omitempty" json:"knownHostsPath,omitempty"`
+	InsecureIgnoreHostKey bool   `yaml:"insecureIgnoreHostKey,omitempty" json:"insecureIgnoreHostKey,omitempty"`
 }
 
 // Taint biểu diễn một Kubernetes Node Taint áp dụng ngay khi node gia nhập cụm.

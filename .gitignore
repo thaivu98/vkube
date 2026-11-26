@@ -37,6 +37,7 @@ bundles/
 id_rsa*
 id_ed25519*
 kubeconfig*
+cluster.yaml
 *.local.yaml
 *.local.yml
 lab/local/

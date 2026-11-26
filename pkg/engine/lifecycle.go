@@ -72,8 +72,21 @@ if [ -x /usr/local/bin/kubeadm ]; then
   /usr/local/bin/kubeadm reset -f --cri-socket unix:///run/containerd/containerd.sock || true
 fi
 systemctl stop kubelet || true
-rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /tmp/vkube-bundle* /var/tmp/vkube-bundle*
-iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X || true
+rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /var/tmp/vkube-bundle*
+
+# Chỉ dọn các chain của Kubernetes & Calico, TUYỆT ĐỐI không flush toàn bộ firewall (ufw/SSH) của host
+if command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev/null 2>&1; then
+  iptables-save | grep -vE '(KUBE-|cali-|FELIX-)' | iptables-restore || true
+fi
+
+# Dọn các interface mạng ảo còn sót của Calico/CNI
+for iface in tunl0 vxlan.calico cni0 flannel.1; do
+  ip link delete "$iface" 2>/dev/null || true
+done
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -E '^cali' || true); do
+  ip link delete "$iface" 2>/dev/null || true
+done
+
 systemctl restart containerd || true
 `
 	if err := pool.RunParallel(ctx, cfg.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {

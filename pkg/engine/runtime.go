@@ -74,22 +74,25 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 			return fmt.Errorf("upload bundle: %w", err)
 		}
 
-		// Ghi các file cấu hình systemd & crictl nhúng sẵn vào /tmp trước khi cài bằng sudo
-		if err := r.WriteFile(ctx, templates.ContainerdService(), "/tmp/vkube-containerd.service", 0o644); err != nil {
+		// Ghi các file cấu hình systemd & crictl vào thư mục riêng .vkube-tmp (tránh dùng /tmp dùng chung)
+		if err := r.WriteFile(ctx, templates.ContainerdService(), ".vkube-tmp/containerd.service", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.KubeletService(), "/tmp/vkube-kubelet.service", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.KubeletService(), ".vkube-tmp/kubelet.service", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.KubeadmDropin(), "/tmp/vkube-10-kubeadm.conf", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.KubeadmDropin(), ".vkube-tmp/10-kubeadm.conf", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.CrictlConfig(), "/tmp/vkube-crictl.yaml", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.CrictlConfig(), ".vkube-tmp/crictl.yaml", 0o600); err != nil {
 			return err
 		}
 
+		sshUser := state.Config.EffectiveSSH(node).User
 		installScript := fmt.Sprintf(`set -euo pipefail
-rm -rf %s /tmp/vkube-bundle* && mkdir -p %s /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/systemd/system/kubelet.service.d
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+STAGE_TMP="$USER_HOME/.vkube-tmp"
+rm -rf %s && mkdir -p -m 0700 %s && mkdir -p /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d
 %s
 rm -f %s
 
@@ -104,16 +107,19 @@ if [ -d %s/images ]; then
   mv -f %s/images/*.tar %s/
 fi
 
-mv -f /tmp/vkube-containerd.service /etc/systemd/system/containerd.service
-mv -f /tmp/vkube-kubelet.service /etc/systemd/system/kubelet.service
-mv -f /tmp/vkube-10-kubeadm.conf /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-mv -f /tmp/vkube-crictl.yaml /etc/crictl.yaml
+install -m 0644 "$STAGE_TMP/containerd.service" /etc/systemd/system/containerd.service
+install -m 0644 "$STAGE_TMP/kubelet.service" /etc/systemd/system/kubelet.service
+install -m 0644 "$STAGE_TMP/10-kubeadm.conf" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+install -m 0644 "$STAGE_TMP/crictl.yaml" /etc/crictl.yaml
+rm -rf "$STAGE_TMP"
+
+# Gắn cứng --node-ip cho kubelet để máy nhiều card mạng luôn đăng ký đúng IP khai báo trong cluster.yaml
+printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet
 
 /usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
 sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
 sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml
-mkdir -p /etc/containerd/certs.d
 
 systemctl daemon-reload
 systemctl enable --now containerd
@@ -126,14 +132,16 @@ for img_tar in %s/*.tar; do
   rm -f "$img_tar"
 done
 
-rm -rf %s /tmp/vkube-bundle*
+rm -rf %s
 `,
+			sshUser,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir, remoteImageDir,
 			extractCmd, remoteArchive,
 			remoteWorkDir,
 			remoteWorkDir, remoteWorkDir,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir,
 			remoteWorkDir, remoteWorkDir, remoteImageDir,
+			node.Host,
 			sandboxImage,
 			remoteImageDir,
 			remoteWorkDir,
@@ -144,7 +152,7 @@ rm -rf %s /tmp/vkube-bundle*
 			return fmt.Errorf("install runtime & import images: %w", err)
 		}
 		if len(state.Config.Spec.Registry.Mirrors) > 0 {
-			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r); err != nil {
+			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r, sshUser); err != nil {
 				return fmt.Errorf("configure private registry mirrors: %w", err)
 			}
 			if _, err := r.RunSudo(ctx, "systemctl restart containerd"); err != nil {
@@ -186,9 +194,10 @@ func decompressZstdToTempTar(zstPath string) (string, error) {
 	return outPath, nil
 }
 
-// runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node (không cần build Offline Bundle).
+// runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node,
+// kèm kiểm tra SHA256 ngay trên node trước khi cài đặt vào /usr/local/bin.
 func (e *Engine) runRuntimeOnline(ctx context.Context, state *ClusterState) error {
-	fmt.Fprintf(e.Out, "==> [3/6] Runtime & Artifacts (Online): Tải trực tiếp binaries & cấu hình containerd/kubelet song song...\n")
+	fmt.Fprintf(e.Out, "==> [3/6] Runtime & Artifacts (Online): Tải trực tiếp binaries, verify SHA256 & cấu hình containerd/kubelet song song...\n")
 
 	pauseVersion := state.BundleManifest.Components["pause"]
 	if pauseVersion == "" {
@@ -197,37 +206,69 @@ func (e *Engine) runRuntimeOnline(ctx context.Context, state *ClusterState) erro
 	sandboxImage := fmt.Sprintf("registry.k8s.io/pause:%s", pauseVersion)
 
 	return state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
-		if err := r.WriteFile(ctx, templates.ContainerdService(), "/tmp/vkube-containerd.service", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.ContainerdService(), ".vkube-tmp/containerd.service", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.KubeletService(), "/tmp/vkube-kubelet.service", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.KubeletService(), ".vkube-tmp/kubelet.service", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.KubeadmDropin(), "/tmp/vkube-10-kubeadm.conf", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.KubeadmDropin(), ".vkube-tmp/10-kubeadm.conf", 0o600); err != nil {
 			return err
 		}
-		if err := r.WriteFile(ctx, templates.CrictlConfig(), "/tmp/vkube-crictl.yaml", 0o644); err != nil {
+		if err := r.WriteFile(ctx, templates.CrictlConfig(), ".vkube-tmp/crictl.yaml", 0o600); err != nil {
 			return err
 		}
 
+		sshUser := state.Config.EffectiveSSH(node).User
 		var dlCmds []string
 		dlCmds = append(dlCmds, "set -euo pipefail")
-		dlCmds = append(dlCmds, fmt.Sprintf("mkdir -p /usr/local/bin /opt/cni/bin %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d", remoteManifestDir))
+		dlCmds = append(dlCmds, fmt.Sprintf(`USER_HOME="$(getent passwd %s | cut -d: -f6)"
+STAGE_TMP="$USER_HOME/.vkube-tmp"
+DL_DIR="/var/lib/vkube/online-dl"
+rm -rf "$DL_DIR" && mkdir -p -m 0700 "$DL_DIR"
+mkdir -p /usr/local/bin /opt/cni/bin %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d
+
+verify_sha256() {
+  local file="$1"
+  local sha_url="$2"
+  local fname="$3"
+  local expected
+  expected="$(curl -fsSL "$sha_url" | awk -v f="$fname" '{
+    gsub(/^\*/, "", $2);
+    if ($2 == f || $2 == "./" f) { print $1; exit }
+    if (first == "" && length($1) == 64) first = $1
+  } END { if (first != "") print first }' | head -n 1)"
+  if [ "${#expected}" -ne 64 ]; then
+    echo "Invalid SHA256 from $sha_url" >&2
+    return 1
+  fi
+  echo "$expected  $file" | sha256sum -c - >/dev/null
+}`, sshUser, remoteManifestDir))
 
 		for _, art := range state.ResolvedBOM.Artifacts {
+			urlFile := path.Base(art.URL)
+			dlTarget := fmt.Sprintf(`"$DL_DIR/%s"`, art.Name)
 			switch art.Type {
 			case versions.ArtifactTypeBinary:
 				destPath := path.Join("/usr/local/bin", path.Base(art.Dest))
-				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %q && chmod 0755 %q", art.URL, destPath, destPath))
+				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+				if art.SHA256URL != "" {
+					dlCmds = append(dlCmds, fmt.Sprintf("verify_sha256 %s %q %q", dlTarget, art.SHA256URL, urlFile))
+				}
+				dlCmds = append(dlCmds, fmt.Sprintf("install -m 0755 %s %q && rm -f %s", dlTarget, destPath, dlTarget))
 			case versions.ArtifactTypeTarball:
+				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+				if art.SHA256URL != "" {
+					dlCmds = append(dlCmds, fmt.Sprintf("verify_sha256 %s %q %q", dlTarget, art.SHA256URL, urlFile))
+				}
 				switch art.Dest {
 				case "cni-plugins":
-					dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q | tar -xzf - -C /opt/cni/bin", art.URL))
+					dlCmds = append(dlCmds, fmt.Sprintf("tar -xzf %s -C /opt/cni/bin && rm -f %s", dlTarget, dlTarget))
 				default:
 					if art.Name == "containerd" {
-						dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q | tar -xzf - --strip-components=1 -C /usr/local/bin", art.URL))
+						dlCmds = append(dlCmds, fmt.Sprintf("tar -xzf %s --strip-components=1 -C /usr/local/bin && rm -f %s", dlTarget, dlTarget))
 					} else {
-						dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q | tar -xzf - -C /usr/local/bin", art.URL))
+						dlCmds = append(dlCmds, fmt.Sprintf("tar -xzf %s -C /usr/local/bin && rm -f %s", dlTarget, dlTarget))
 					}
 				}
 			case versions.ArtifactTypeManifest:
@@ -238,10 +279,15 @@ func (e *Engine) runRuntimeOnline(ctx context.Context, state *ClusterState) erro
 			}
 		}
 
-		dlCmds = append(dlCmds, fmt.Sprintf(`mv -f /tmp/vkube-containerd.service /etc/systemd/system/containerd.service
-mv -f /tmp/vkube-kubelet.service /etc/systemd/system/kubelet.service
-mv -f /tmp/vkube-10-kubeadm.conf /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-mv -f /tmp/vkube-crictl.yaml /etc/crictl.yaml
+		dlCmds = append(dlCmds, fmt.Sprintf(`rm -rf "$DL_DIR"
+install -m 0644 "$STAGE_TMP/containerd.service" /etc/systemd/system/containerd.service
+install -m 0644 "$STAGE_TMP/kubelet.service" /etc/systemd/system/kubelet.service
+install -m 0644 "$STAGE_TMP/10-kubeadm.conf" /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+install -m 0644 "$STAGE_TMP/crictl.yaml" /etc/crictl.yaml
+rm -rf "$STAGE_TMP"
+
+# Gắn cứng --node-ip cho kubelet để máy nhiều card mạng luôn đăng ký đúng IP khai báo trong cluster.yaml
+printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet
 
 /usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
@@ -250,14 +296,14 @@ sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/conta
 
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, sandboxImage))
+systemctl enable kubelet`, node.Host, sandboxImage))
 
-		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries & cài đặt containerd/kubelet...\n", node.Name)
+		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries, verify SHA256 & cài containerd/kubelet...\n", node.Name)
 		if _, err := r.RunSudo(ctx, strings.Join(dlCmds, "\n")); err != nil {
 			return fmt.Errorf("online runtime setup failed: %w", err)
 		}
 		if len(state.Config.Spec.Registry.Mirrors) > 0 {
-			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r); err != nil {
+			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r, sshUser); err != nil {
 				return fmt.Errorf("configure private registry mirrors: %w", err)
 			}
 			if _, err := r.RunSudo(ctx, "systemctl restart containerd"); err != nil {

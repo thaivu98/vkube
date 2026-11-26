@@ -22,6 +22,7 @@ type KubeadmInitData struct {
 	CertificateKey       string
 	CertSANs             []string
 	ImagePullPolicy      string
+	ImageRepository      string
 }
 
 // KubeVipData chứa tham số render static pod kube-vip.yaml cho HA Control Plane.
@@ -56,6 +57,9 @@ func RenderClusterTemplate(data ClusterTemplateData) ([]byte, error) {
 func RenderKubeadmInit(data KubeadmInitData) ([]byte, error) {
 	if data.ImagePullPolicy == "" {
 		data.ImagePullPolicy = "Never"
+	}
+	if data.ImageRepository == "" {
+		data.ImageRepository = "registry.k8s.io"
 	}
 	return render("files/kubeadm-init.yaml.tmpl", data)
 }

@@ -66,16 +66,67 @@ func (e *Engine) RunPreflight(ctx context.Context, state *ClusterState) error {
 		return err
 	}
 
-	// Kiểm tra chống trùng IP VIP trên mạng LAN thực tế từ Primary Control Plane.
+	// Đảm bảo toàn bộ các node trong cụm có cùng kiến trúc CPU (chống lẫn amd64/arm64 ở chế độ Online).
+	var expectedArch string
+	for _, n := range state.Config.Spec.Nodes {
+		f := state.Facts[n.Name]
+		if f == nil {
+			continue
+		}
+		if expectedArch == "" {
+			expectedArch = f.Arch
+			continue
+		}
+		if f.Arch != expectedArch {
+			return fmt.Errorf("mixed CPU architectures detected: node %q is %s while cluster expects %s", n.Name, f.Arch, expectedArch)
+		}
+	}
+
+	// Kiểm tra trên Primary Control Plane: cụm chưa tồn tại & các port bắt buộc (6443, 2379, 2380, 10250) còn trống.
+	cp1 := state.Config.ControlPlanes()[0]
+	cp1Runner, err := state.Pool.Get(cp1.Name)
+	if err != nil {
+		return err
+	}
+	cpCheckScript := `set -euo pipefail
+if [ -f /etc/kubernetes/admin.conf ]; then
+  echo "ERR:CLUSTER_EXISTS"
+  exit 0
+fi
+if command -v ss >/dev/null 2>&1; then
+  for p in 6443 2379 2380 10250; do
+    if ss -lnt "( sport = :$p )" 2>/dev/null | grep -q ":$p"; then
+      echo "ERR:PORT_IN_USE:$p"
+      exit 0
+    fi
+  done
+fi
+echo "OK"
+`
+	if cpRes, err := cp1Runner.RunSudo(ctx, cpCheckScript); err == nil {
+		out := strings.TrimSpace(cpRes.Stdout)
+		if out == "ERR:CLUSTER_EXISTS" {
+			return fmt.Errorf("Kubernetes cluster appears to be already initialized on %s (/etc/kubernetes/admin.conf exists); run 'vkube reset' before re-applying", cp1.Name)
+		}
+		if strings.HasPrefix(out, "ERR:PORT_IN_USE:") {
+			port := strings.TrimPrefix(out, "ERR:PORT_IN_USE:")
+			return fmt.Errorf("required control-plane port %s is already in use on %s", port, cp1.Name)
+		}
+	}
+
+	// Kiểm tra chống trùng IP VIP trên mạng LAN thực tế từ Primary Control Plane (ưu tiên arping -D, fallback ping).
 	if state.Config.Spec.VIP != "" {
-		cp1 := state.Config.ControlPlanes()[0]
-		r, err := state.Pool.Get(cp1.Name)
-		if err != nil {
-			return err
+		iface := state.Config.Spec.VIPInterface
+		if iface == "" && state.Facts[cp1.Name] != nil {
+			iface = state.Facts[cp1.Name].DefaultInterface
 		}
 		fmt.Fprintf(e.Out, "  [preflight] Kiểm tra VIP %s chưa bị thiết bị nào khác chiếm dụng trong LAN...\n", state.Config.Spec.VIP)
-		checkCmd := fmt.Sprintf("ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE", state.Config.Spec.VIP)
-		res, err := r.RunSudo(ctx, checkCmd)
+		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && [ -n %q ]; then
+  arping -D -I %q -c 2 -w 2 %s >/dev/null 2>&1 && echo FREE || echo IN_USE
+else
+  ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE
+fi`, iface, iface, state.Config.Spec.VIP, state.Config.Spec.VIP)
+		res, err := cp1Runner.RunSudo(ctx, checkCmd)
 		if err != nil {
 			return fmt.Errorf("check VIP availability on %s: %w", cp1.Name, err)
 		}
@@ -137,7 +188,12 @@ func normalizeLinuxArch(raw string) (string, error) {
 
 func validateNodeFacts(node api.NodeConfig, facts *api.NodeFacts, cfg *api.ClusterConfig, manifest *api.BundleManifest) error {
 	if facts.OSID != "ubuntu" {
-		return fmt.Errorf("unsupported OS %q %s (vkube v0.1 targets Ubuntu 22.04 / 24.04 LTS)", facts.OSID, facts.OSVersion)
+		return fmt.Errorf("unsupported OS %q %s (vkube v0.1 targets Ubuntu >= 22.04)", facts.OSID, facts.OSVersion)
+	}
+	if majorStr, _, ok := strings.Cut(facts.OSVersion, "."); ok {
+		if major, err := strconv.Atoi(majorStr); err == nil && major < 22 {
+			return fmt.Errorf("unsupported Ubuntu version %s (minimum required: 22.04)", facts.OSVersion)
+		}
 	}
 	if cfg.Spec.Arch != api.ArchAuto && facts.Arch != cfg.Spec.Arch {
 		return fmt.Errorf("node arch %q does not match cluster spec.arch %q", facts.Arch, cfg.Spec.Arch)
@@ -157,17 +213,29 @@ func validateNodeFacts(node api.NodeConfig, facts *api.NodeFacts, cfg *api.Clust
 	return nil
 }
 
+// syncWriter bảo vệ luồng ghi Out an toàn khi nhiều goroutine ghi log song song.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
 // Engine điều phối toàn bộ vòng đời triển khai, kiểm tra và gỡ bỏ cụm Kubernetes.
 type Engine struct {
 	Out io.Writer
 }
 
-// NewEngine khởi tạo Engine với luồng log out.
+// NewEngine khởi tạo Engine với luồng log out được bảo vệ thread-safe.
 func NewEngine(out io.Writer) *Engine {
 	if out == nil {
 		out = io.Discard
 	}
-	return &Engine{Out: out}
+	return &Engine{Out: &syncWriter{w: out}}
 }
 
 // ClusterState giữ ngữ cảnh chạy xuyên suốt các giai đoạn của lệnh `vkube apply`.

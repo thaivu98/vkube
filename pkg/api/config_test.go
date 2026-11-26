@@ -224,6 +224,17 @@ spec:
 `,
 			wantErr: "spec.addons.metalLB.ipRange is required",
 		},
+		{
+			name: "invalid DNS-1123 node name",
+			yaml: `
+spec:
+  arch: arm64
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: Worker_1, host: 10.0.0.1, role: control-plane }
+`,
+			wantErr: "must be a valid lowercase DNS-1123 name",
+		},
 	}
 
 	for _, tc := range tests {

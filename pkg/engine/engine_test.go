@@ -98,6 +98,33 @@ func TestRunPreflight_CachesNodeFactsAndDetectsArchMismatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match Offline Bundle arch") {
 		t.Fatalf("expected bundle arch mismatch error, got: %v", err)
 	}
+
+	// 3. Cụm lẫn amd64 + arm64 ở chế độ Online (BundleManifest == nil) -> Phải báo lỗi mixed arch ngay ở preflight
+	mixedCfg := &api.ClusterConfig{
+		Metadata: api.ClusterMetadata{Name: "mixed"},
+		Spec: api.ClusterSpec{
+			Arch: api.ArchAuto,
+			Nodes: []api.NodeConfig{
+				{Name: "cp-1", Host: "192.0.2.10", Role: api.RoleControlPlane},
+				{Name: "worker-1", Host: "192.0.2.11", Role: api.RoleWorker},
+			},
+		},
+	}
+	probeAMD64 := strings.Replace(probeARM64, "ARCH=aarch64", "ARCH=x86_64", 1)
+	mixedPool := ssh.NewPool(map[string]ssh.Runner{
+		"cp-1":     &fakeNodeRunner{name: "cp-1", host: "192.0.2.10", output: probeARM64},
+		"worker-1": &fakeNodeRunner{name: "worker-1", host: "192.0.2.11", output: probeAMD64},
+	}, io.Discard)
+	mixedState := &ClusterState{
+		Config:     mixedCfg,
+		OnlineMode: true,
+		Pool:       mixedPool,
+		Facts:      make(map[string]*api.NodeFacts),
+	}
+	err = eng.RunPreflight(context.Background(), mixedState)
+	if err == nil || !strings.Contains(err.Error(), "mixed CPU architectures detected") {
+		t.Fatalf("expected mixed CPU arch error, got: %v", err)
+	}
 }
 
 func TestBuildHostsBlock(t *testing.T) {

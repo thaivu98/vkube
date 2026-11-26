@@ -18,6 +18,7 @@ components:
   # Core Addons (bật/tắt linh hoạt trong cluster.yaml)
   metrics_server: v0.7.2
   local_path: v0.0.30
+  busybox: "1.36.1"
   metallb: v0.14.9
   kong_manifest: v2.12.5
   kong_gateway: "3.4"
@@ -56,6 +57,7 @@ artifacts:
     component: runc
     type: binary
     url: https://github.com/opencontainers/runc/releases/download/{{.Version}}/runc.{{.Arch}}
+    sha256Url: https://github.com/opencontainers/runc/releases/download/{{.Version}}/runc.sha256sum
     dest: bin/runc
 
   - name: cni-plugins
@@ -69,6 +71,7 @@ artifacts:
     component: crictl
     type: tarball
     url: https://github.com/kubernetes-sigs/cri-tools/releases/download/{{.Version}}/crictl-{{.Version}}-linux-{{.Arch}}.tar.gz
+    sha256Url: https://github.com/kubernetes-sigs/cri-tools/releases/download/{{.Version}}/crictl-{{.Version}}-linux-{{.Arch}}.tar.gz.sha256
     dest: bin
 
   - name: calico-manifest
@@ -134,7 +137,7 @@ imageGroups:
     dest: images/local-path.tar
     images:
       - docker.io/rancher/local-path-provisioner:{{.Components.local_path}}
-      - docker.io/library/busybox:latest
+      - docker.io/library/busybox:{{.Components.busybox}}
 
   - name: metallb
     dest: images/metallb.tar

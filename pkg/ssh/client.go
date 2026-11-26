@@ -3,6 +3,7 @@ package ssh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,12 +11,17 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/sftp"
 	"github.com/thaivu98/vkube/pkg/api"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+var knownHostsMu sync.Mutex
 
 const defaultDialTimeout = 15 * time.Second
 
@@ -58,10 +64,15 @@ func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Cl
 	}
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
+	hostKeyCB, err := buildHostKeyCallback(sshCfg)
+	if err != nil {
+		return nil, fmt.Errorf("node %s (%s): %w", nodeName, host, err)
+	}
+
 	clientCfg := &gossh.ClientConfig{
 		User:            sshCfg.User,
 		Auth:            authMethods,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), // Lab/On-prem provisioning ban đầu; v0.5 bổ sung known_hosts strict mode.
+		HostKeyCallback: hostKeyCB,
 		Timeout:         defaultDialTimeout,
 	}
 
@@ -200,22 +211,90 @@ func (c *Client) WriteFile(ctx context.Context, content []byte, remotePosixPath 
 	if err != nil {
 		return fmt.Errorf("sftp create %s on %s: %w", remotePosixPath, c.nodeName, err)
 	}
+	// Áp dụng quyền file (ví dụ 0600) TRƯỚC khi ghi dữ liệu nhạy cảm để tránh cửa sổ race condition.
+	if mode != 0 {
+		if err := sftpClient.Chmod(remotePosixPath, mode); err != nil {
+			_ = dst.Close()
+			return fmt.Errorf("sftp chmod %s on %s: %w", remotePosixPath, c.nodeName, err)
+		}
+	}
 	if _, err := dst.Write(content); err != nil {
 		_ = dst.Close()
 		return fmt.Errorf("sftp write %s on %s: %w", remotePosixPath, c.nodeName, err)
 	}
-	if err := dst.Close(); err != nil {
-		return err
+	return dst.Close()
+}
+
+// buildHostKeyCallback xác thực SSH host key qua ~/.ssh/known_hosts theo cơ chế TOFU (Trust On First Use):
+// tự động lưu host key lần đầu kết nối, và TỪ CHỐI ngay nếu host key bị thay đổi (chống MITM).
+func buildHostKeyCallback(cfg api.SSHConfig) (gossh.HostKeyCallback, error) {
+	if cfg.InsecureIgnoreHostKey {
+		return gossh.InsecureIgnoreHostKey(), nil
 	}
-	if mode != 0 {
-		_ = sftpClient.Chmod(remotePosixPath, mode)
+	khPath := cfg.KnownHostsPath
+	if khPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve home dir for known_hosts: %w", err)
+		}
+		khPath = filepath.Join(home, ".ssh", "known_hosts")
+	} else {
+		var err error
+		khPath, err = expandHomePath(khPath)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return nil
+
+	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
+		knownHostsMu.Lock()
+		defer knownHostsMu.Unlock()
+
+		if err := os.MkdirAll(filepath.Dir(khPath), 0o700); err != nil {
+			return fmt.Errorf("prepare known_hosts dir: %w", err)
+		}
+		f, err := os.OpenFile(khPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
+		if err != nil {
+			return fmt.Errorf("open known_hosts %q: %w", khPath, err)
+		}
+		_ = f.Close()
+
+		cb, err := knownhosts.New(khPath)
+		if err != nil {
+			return fmt.Errorf("parse known_hosts %q: %w", khPath, err)
+		}
+
+		err = cb(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) && len(keyErr.Want) == 0 {
+			// Host chưa từng thấy -> TOFU: ghi nhận vào known_hosts
+			line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+			af, openErr := os.OpenFile(khPath, os.O_APPEND|os.O_WRONLY, 0o600)
+			if openErr != nil {
+				return fmt.Errorf("append known_hosts: %w", openErr)
+			}
+			_, writeErr := af.WriteString(line + "\n")
+			_ = af.Close()
+			return writeErr
+		}
+		return fmt.Errorf("SSH host key verification failed for %s (possible MITM or VM was re-imaged; remove old entry from %s or pass --insecure-skip-host-key-check): %w", hostname, khPath, err)
+	}, nil
 }
 
 func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
 	var methods []gossh.AuthMethod
 
+	// 1. Hỗ trợ ssh-agent qua biến môi trường SSH_AUTH_SOCK (nếu đang chạy)
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if agentConn, err := net.DialTimeout("unix", sock, 2*time.Second); err == nil {
+			methods = append(methods, gossh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
+		}
+	}
+
+	// 2. Private Key (hỗ trợ cả key không passphrase lẫn có passphrase)
 	if cfg.PrivateKeyPath != "" {
 		keyPath, err := expandHomePath(cfg.PrivateKeyPath)
 		if err != nil {
@@ -225,13 +304,19 @@ func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read ssh private key %q: %w", keyPath, err)
 		}
-		signer, err := gossh.ParsePrivateKey(keyBytes)
+		var signer gossh.Signer
+		if cfg.PrivateKeyPassphrase != "" {
+			signer, err = gossh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(cfg.PrivateKeyPassphrase))
+		} else {
+			signer, err = gossh.ParsePrivateKey(keyBytes)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("parse ssh private key %q: %w", keyPath, err)
 		}
 		methods = append(methods, gossh.PublicKeys(signer))
 	}
 
+	// 3. Password & KeyboardInteractive
 	if cfg.Password != "" {
 		methods = append(methods,
 			gossh.Password(cfg.Password),
@@ -246,7 +331,7 @@ func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
 	}
 
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("no SSH auth method configured (provide privateKeyPath or password)")
+		return nil, fmt.Errorf("no SSH auth method configured (provide privateKeyPath, password, or SSH_AUTH_SOCK)")
 	}
 	return methods, nil
 }
