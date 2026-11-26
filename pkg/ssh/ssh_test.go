@@ -29,9 +29,11 @@ func (m *mockRunner) Run(_ context.Context, _ string) (ExecResult, error) {
 func (m *mockRunner) RunSudo(_ context.Context, _ string) (ExecResult, error) {
 	return ExecResult{Stdout: "ok"}, m.err
 }
-func (m *mockRunner) UploadFile(_ context.Context, _, _ string) error                   { return m.err }
-func (m *mockRunner) WriteFile(_ context.Context, _ []byte, _ string, _ os.FileMode) error { return m.err }
-func (m *mockRunner) Close() error                                                      { return nil }
+func (m *mockRunner) UploadFile(_ context.Context, _, _ string) error { return m.err }
+func (m *mockRunner) WriteFile(_ context.Context, _ []byte, _ string, _ os.FileMode) error {
+	return m.err
+}
+func (m *mockRunner) Close() error { return nil }
 
 func TestBuildSudoCommand(t *testing.T) {
 	cmd, stdin := buildSudoCommand("root", "secret", "echo 'hi'")

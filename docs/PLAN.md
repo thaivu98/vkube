@@ -11,7 +11,7 @@
     - Phát hiện và vá ngay 2 lỗi thực tế quan trọng trong quá trình test thật: ngưỡng RAM `MemTotal` trên VM 2GB ARM64 (`1624 MB`) và chuyển staging bundle từ `/tmp` (`tmpfs`) sang `/var/tmp` & `/var/lib/vkube/staging` trên ổ đĩa thật.
     - Bổ sung hướng dẫn lab tại `lab/README.md`.
     - Bổ sung **Modular Core Addons** bật/tắt linh hoạt (`metricsServer`, `localPathStorage`, `metalLB`, **`kongIngress`** DB-less + `customManifests`) và hỗ trợ **Private Registry / Harbor mirror** (`spec.registry.mirrors` -> `/etc/containerd/certs.d/`) quản lý 100% trong BOM `versions.yaml`.
-- **Bước tiếp theo (Next Action):** Tiếp tục kiểm thử thực tế (networking Calico, `vkube reset`, test HA / air-gapped) và chỉnh sửa hoàn thiện trước khi gắn tag phát hành **`v1.32.2-vkube.1`**.
+- **Bước tiếp theo (Next Action):** Đã rà soát bảo mật, dọn rác, pass 100% `gofmt`/`go vet`/`go test` và phát hành tag **`v1.32.2-vkube.1`**. Sẵn sàng bắt đầu **v0.2** (Cilium CNI, `vkube add-node`, `vkube backup`/`restore` cho `etcd`).
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.

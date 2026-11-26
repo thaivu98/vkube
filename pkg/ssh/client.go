@@ -100,7 +100,7 @@ func (c *Client) Run(ctx context.Context, command string) (ExecResult, error) {
 	return c.exec(ctx, command, nil)
 }
 
-// RunSudo thực thi lệnh với quyền root. Nếu user không phải root, tự động dùng `sudo -S -p ''`
+// RunSudo thực thi lệnh với quyền root. Nếu user không phải root, tự động dùng `sudo -S -p ”`
 // và truyền mật khẩu qua stdin (không bao giờ lộ mật khẩu trong tham số tiến trình).
 func (c *Client) RunSudo(ctx context.Context, command string) (ExecResult, error) {
 	wrapped, stdin := buildSudoCommand(c.cfg.User, c.cfg.SudoPassword, command)

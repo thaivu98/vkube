@@ -106,9 +106,9 @@ spec:
       host: 192.0.2.11
       role: control-plane
       # Ví dụ ghi đè SSH riêng cho từng node (bỏ comment nếu khác mặc định spec.ssh):
-      # user: master
+      # user: ubuntu
       # port: 22
-      # password: "1"
+      # password: "your-password"
 
     # === Control Plane bổ sung cho cụm HA (bỏ comment cả 2 node dưới + bật `vip` ở trên) ===
     # - name: cp-2

@@ -109,7 +109,7 @@ func TestParseClusterConfig_ValidationErrors(t *testing.T) {
 			yaml: `
 spec:
   arch: riscv64
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
 `,
@@ -120,7 +120,7 @@ spec:
 			yaml: `
 spec:
   arch: arm64
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: master, host: 10.0.0.1, role: control-plane }
     - { name: master, host: 10.0.0.2, role: worker }
@@ -133,7 +133,7 @@ spec:
 spec:
   arch: amd64
   vip: 10.0.0.100
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
     - { name: cp-2, host: 10.0.0.2, role: control-plane }
@@ -145,7 +145,7 @@ spec:
 			yaml: `
 spec:
   arch: amd64
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
     - { name: cp-2, host: 10.0.0.2, role: control-plane }
@@ -170,7 +170,7 @@ spec:
   arch: amd64
   networking:
     podSubnet: not-a-cidr
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
 `,
@@ -181,7 +181,7 @@ spec:
 			yaml: `
 spec:
   arch: arm64
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - name: cp-1
       host: 10.0.0.1
@@ -202,7 +202,7 @@ spec:
 spec:
   arch: amd64
   vip: 10.0.0.1
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
     - { name: cp-2, host: 10.0.0.2, role: control-plane }
@@ -218,7 +218,7 @@ spec:
   addons:
     metalLB:
       enabled: true
-  ssh: { password: "1" }
+  ssh: { password: "test-pass" }
   nodes:
     - { name: cp-1, host: 10.0.0.1, role: control-plane }
 `,

@@ -25,9 +25,11 @@ func (f *fakeNodeRunner) Run(_ context.Context, _ string) (ssh.ExecResult, error
 func (f *fakeNodeRunner) RunSudo(_ context.Context, _ string) (ssh.ExecResult, error) {
 	return ssh.ExecResult{Stdout: f.output}, nil
 }
-func (f *fakeNodeRunner) UploadFile(_ context.Context, _, _ string) error                   { return nil }
-func (f *fakeNodeRunner) WriteFile(_ context.Context, _ []byte, _ string, _ os.FileMode) error { return nil }
-func (f *fakeNodeRunner) Close() error                                                      { return nil }
+func (f *fakeNodeRunner) UploadFile(_ context.Context, _, _ string) error { return nil }
+func (f *fakeNodeRunner) WriteFile(_ context.Context, _ []byte, _ string, _ os.FileMode) error {
+	return nil
+}
+func (f *fakeNodeRunner) Close() error { return nil }
 
 func TestParseNodeFacts(t *testing.T) {
 	raw := `OS_ID=ubuntu
