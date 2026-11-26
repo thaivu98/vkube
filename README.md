@@ -35,8 +35,9 @@ Mỗi tag khóa cứng một bộ phiên bản đã kiểm thử tương thích 
 vkube bundle build --arch amd64 --output bundles/vkube-v1.32.2-linux-amd64.tar.zst
 vkube bundle build --arch arm64 --output bundles/vkube-v1.32.2-linux-arm64.tar.zst
 
-# 2. Chuyển bundle vào môi trường Air-gapped và dựng cụm
-vkube apply -f examples/cluster-ha.yaml --bundle bundles/vkube-v1.32.2-linux-amd64.tar.zst
+# 2. Sao chép file mẫu clusters/cluster_template.yaml sang file cụm của bạn và dựng cụm
+cp clusters/cluster_template.yaml clusters/prod.local.yaml
+vkube apply -f clusters/prod.local.yaml --bundle bundles/vkube-bundle-v1.32.2-vkube.1-linux-amd64.tar.zst
 ```
 
 ## Build từ mã nguồn & Cài đặt gói tiên quyết

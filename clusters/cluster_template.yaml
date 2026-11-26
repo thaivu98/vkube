@@ -1,0 +1,112 @@
+# ==============================================================================
+# vkube — File mẫu cấu hình cụm Kubernetes (Cluster Template)
+# ==============================================================================
+# Hướng dẫn quản lý nhiều cụm (Multi-cluster):
+#   1. Sao chép file này sang một file riêng cho từng cụm, ví dụ:
+#        cp clusters/cluster_template.yaml clusters/lab-arm64.local.yaml
+#        cp clusters/cluster_template.yaml clusters/prod-hn.local.yaml
+#      (Các file có đuôi *.local.yaml đã được .gitignore chặn sẵn để tránh
+#       đẩy nhầm IP/mật khẩu nội bộ lên Git).
+#   2. Chỉnh sửa thông tin SSH và danh sách nodes bên dưới theo mô hình của bạn:
+#        - Mô hình 1: Single-node (1 Control Plane duy nhất — vừa chạy hệ thống vừa chạy Pod)
+#        - Mô hình 2: Standard (1 Control Plane + N Workers)  <-- Mặc định bên dưới
+#        - Mô hình 3: High Availability / HA (3 hoặc 5 Control Planes + kube-vip + N Workers)
+#   3. Kiểm tra nhanh cấu hình trước khi triển khai:
+#        vkube apply -f clusters/<ten-cum>.local.yaml --dry-run
+#   4. Triển khai cụm bằng Offline Bundle:
+#        vkube apply -f clusters/<ten-cum>.local.yaml --bundle bundles/<file>.tar.zst
+# ==============================================================================
+
+apiVersion: vkube.io/v1alpha1
+kind: Cluster
+
+metadata:
+  # Tên định danh của cụm (dùng để phân biệt khi quản lý nhiều cụm và đặt tên kubeconfig)
+  name: my-cluster
+
+spec:
+  # Kiến trúc CPU của các server đích:
+  #   - "auto" (khuyến nghị / mặc định): vkube tự phát hiện qua SSH ở bước preflight
+  #     và đối chiếu khớp với Offline Bundle.
+  #   - "amd64" hoặc "arm64": chỉ định cứng nếu muốn kiểm tra chặt trước khi chạy.
+  arch: auto
+
+  # ----------------------------------------------------------------------------
+  # Cấu hình High Availability (HA) — CHỈ CẦN KHI CÓ TỪ 3 CONTROL PLANE TRỞ LÊN
+  # ----------------------------------------------------------------------------
+  # Khi triển khai HA (3 hoặc 5 control-plane), bỏ comment dòng `vip` bên dưới.
+  # Lưu ý mạng: VIP BẮT BUỘC phải là IP trống cùng subnet/VLAN với các node CP,
+  # nằm ngoài dải DHCP và không trùng với IP của bất kỳ server nào.
+  # vkube sẽ tự triển khai kube-vip (static pod) và kiểm tra chống trùng IP ở bước preflight.
+  #
+  # vip: 192.0.2.100
+  # vipInterface: ens160             # Tùy chọn: tên card mạng gắn VIP (bỏ trống để tự phát hiện)
+  # controlPlaneEndpoint: 192.0.2.100:6443  # Tùy chọn: dùng nếu bạn có Load Balancer ngoài (HAProxy/F5) thay vì kube-vip
+
+  # Bảo vệ Control Plane: mặc định FALSE (giữ taint NoSchedule để không chạy Pod ứng dụng lên CP).
+  # Chỉ đổi thành true nếu bạn dựng cụm Single-node (1 CP và 0 Worker).
+  allowSchedulingOnControlPlane: false
+
+  # ----------------------------------------------------------------------------
+  # Cấu hình Mạng (Networking & CNI)
+  # ----------------------------------------------------------------------------
+  networking:
+    podSubnet: 10.244.0.0/16         # Dải IP cấp cho Pods (không trùng với mạng LAN vật lý)
+    serviceSubnet: 10.96.0.0/12      # Dải IP cấp cho Services (ClusterIP)
+    cni: calico                      # CNI mặc định ở v0.1: calico (v0.2 bổ sung cilium)
+
+  # ----------------------------------------------------------------------------
+  # Cấu hình SSH mặc định cho toàn cụm (từng node bên dưới có thể ghi đè riêng)
+  # ----------------------------------------------------------------------------
+  ssh:
+    user: ubuntu                     # User SSH mặc định (hỗ trợ root hoặc user thường có quyền sudo)
+    port: 22                         # Cổng SSH mặc định
+    privateKeyPath: ~/.ssh/id_ed25519 # Khuyên dùng SSH Key cho môi trường Production
+    # password: "your-password"      # Tùy chọn: dùng mật khẩu SSH (phù hợp môi trường lab)
+    # sudoPassword: "your-sudo-pass" # Tùy chọn: mật khẩu sudo nếu khác mật khẩu SSH (bỏ trống sẽ tự dùng chung password)
+
+  # ----------------------------------------------------------------------------
+  # Danh sách máy chủ thành viên (Nodes)
+  # ----------------------------------------------------------------------------
+  # Quy tắc quan trọng:
+  #   - `name`: BẮT BUỘC duy nhất trong cụm (sẽ dùng làm Kubernetes Node Name / hostname).
+  #   - `host`: Địa chỉ IP (hoặc DNS nội bộ) của server.
+  #   - `role`: "control-plane" hoặc "worker".
+  #   - Số lượng node `control-plane` phải là số LẺ (1, 3 hoặc 5) để đảm bảo etcd quorum.
+  nodes:
+    # === Control Plane chính (Bắt buộc có ít nhất 1) ===
+    - name: cp-1
+      host: 192.0.2.11
+      role: control-plane
+      # Ví dụ ghi đè SSH riêng cho từng node (bỏ comment nếu khác mặc định spec.ssh):
+      # user: master
+      # port: 22
+      # password: "1"
+
+    # === Control Plane bổ sung cho cụm HA (bỏ comment cả 2 node dưới + bật `vip` ở trên) ===
+    # - name: cp-2
+    #   host: 192.0.2.12
+    #   role: control-plane
+    #
+    # - name: cp-3
+    #   host: 192.0.2.13
+    #   role: control-plane
+
+    # === Worker Nodes (có thể xóa hết nếu chỉ muốn dựng cụm Single-node) ===
+    - name: worker-1
+      host: 192.0.2.21
+      role: worker
+      # Tùy chọn: gắn Kubernetes Node Labels ngay khi join cụm
+      # labels:
+      #   node-role.kubernetes.io/app: "true"
+      #   zone: "rack-a"
+      # Tùy chọn: gắn Kubernetes Node Taints (ví dụ tách riêng node GPU / Database / Ingress)
+      # Effect hợp lệ: NoSchedule | PreferNoSchedule | NoExecute
+      # taints:
+      #   - key: dedicated
+      #     value: gpu
+      #     effect: NoSchedule
+
+    # - name: worker-2
+    #   host: 192.0.2.22
+    #   role: worker

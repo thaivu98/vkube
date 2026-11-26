@@ -140,6 +140,18 @@ func (c *ClusterConfig) Validate() error {
 		if effSSH.PrivateKeyPath == "" && effSSH.Password == "" {
 			errs = append(errs, fmt.Sprintf("%s (%s): SSH authentication required (set privateKeyPath or password on node or spec.ssh)", prefix, n.Name))
 		}
+
+		for j, taint := range n.Taints {
+			if strings.TrimSpace(taint.Key) == "" {
+				errs = append(errs, fmt.Sprintf("%s.taints[%d].key is required", prefix, j))
+			}
+			switch taint.Effect {
+			case TaintEffectNoSchedule, TaintEffectPreferNoSchedule, TaintEffectNoExecute:
+			default:
+				errs = append(errs, fmt.Sprintf("%s.taints[%d].effect %q must be one of %s, %s, %s",
+					prefix, j, taint.Effect, TaintEffectNoSchedule, TaintEffectPreferNoSchedule, TaintEffectNoExecute))
+			}
+		}
 	}
 
 	if cpCount == 0 {
@@ -150,6 +162,11 @@ func (c *ClusterConfig) Validate() error {
 	}
 	if cpCount > 1 && c.Spec.VIP == "" && c.Spec.ControlPlaneEndpoint == "" {
 		errs = append(errs, "HA clusters with multiple control-plane nodes require spec.vip or spec.controlPlaneEndpoint")
+	}
+	if c.Spec.VIP != "" {
+		if _, conflict := seenHosts[c.Spec.VIP]; conflict {
+			errs = append(errs, fmt.Sprintf("spec.vip %q conflicts with an existing node host (VIP must be a dedicated unused IP in the same subnet)", c.Spec.VIP))
+		}
 	}
 
 	if len(errs) > 0 {

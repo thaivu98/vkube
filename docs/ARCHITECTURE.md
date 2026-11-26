@@ -107,7 +107,7 @@ vkube/
 ├── manifests/              # Manifest/template mặc định cho các addon offline
 ├── lab/                    # Hướng dẫn & script dựng lab VM (VMware Fusion ARM64, Multipass, Lima)
 ├── docs/                   # Tài liệu ARCHITECTURE.md, PLAN.md và hướng dẫn vận hành
-├── examples/               # Các file cluster.yaml mẫu (single-node, HA, air-gapped)
+├── clusters/               # Quản lý cấu hình nhiều cụm & file mẫu chuẩn cluster_template.yaml
 ├── Makefile                # Cross-compile (linux/darwin/windows x amd64/arm64), test, vet, fmt
 ├── AGENTS.md               # Quy tắc kỹ thuật, ngôn ngữ & quy trình làm việc cho AI/Contributor
 └── .agent/skills/vkube-dev/# Project Skill cho AI khi phát triển vkube

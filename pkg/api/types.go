@@ -20,6 +20,10 @@ const (
 	CNICalico = "calico"
 	CNICilium = "cilium"
 
+	TaintEffectNoSchedule       = "NoSchedule"
+	TaintEffectPreferNoSchedule = "PreferNoSchedule"
+	TaintEffectNoExecute        = "NoExecute"
+
 	DefaultPodSubnet     = "10.244.0.0/16"
 	DefaultServiceSubnet = "10.96.0.0/12"
 	DefaultSSHPort       = 22
@@ -77,6 +81,9 @@ type ClusterSpec struct {
 	VIP string `yaml:"vip,omitempty" json:"vip,omitempty"`
 	// VIPInterface là tên card mạng gắn VIP (tự động phát hiện nếu bỏ trống).
 	VIPInterface string `yaml:"vipInterface,omitempty" json:"vipInterface,omitempty"`
+	// AllowSchedulingOnControlPlane cho phép gỡ taint NoSchedule trên Control Plane (mặc định false để bảo vệ CP;
+	// chỉ nên bật true cho cụm Single-node không có Worker).
+	AllowSchedulingOnControlPlane bool `yaml:"allowSchedulingOnControlPlane,omitempty" json:"allowSchedulingOnControlPlane,omitempty"`
 	// Networking cấu hình dải mạng Pod, Service và CNI.
 	Networking NetworkingConfig `yaml:"networking,omitempty" json:"networking,omitempty"`
 	// SSH là cấu hình SSH mặc định cho toàn cụm (từng node có thể ghi đè).
@@ -101,6 +108,13 @@ type SSHConfig struct {
 	SudoPassword   string `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
 }
 
+// Taint biểu diễn một Kubernetes Node Taint áp dụng ngay khi node gia nhập cụm.
+type Taint struct {
+	Key    string `yaml:"key" json:"key"`
+	Value  string `yaml:"value,omitempty" json:"value,omitempty"`
+	Effect string `yaml:"effect" json:"effect"` // NoSchedule | PreferNoSchedule | NoExecute
+}
+
 // NodeConfig đại diện cho một Target Node Linux.
 type NodeConfig struct {
 	Name           string            `yaml:"name" json:"name"`
@@ -112,6 +126,7 @@ type NodeConfig struct {
 	Password       string            `yaml:"password,omitempty" json:"password,omitempty"`
 	SudoPassword   string            `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
 	Labels         map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Taints         []Taint           `yaml:"taints,omitempty" json:"taints,omitempty"`
 }
 
 // BundleManifest mô tả metadata và danh sách checksum bên trong một Offline Bundle (.tar.zst).

@@ -176,6 +176,40 @@ spec:
 `,
 			wantErr: "not a valid CIDR",
 		},
+		{
+			name: "invalid taint effect",
+			yaml: `
+spec:
+  arch: arm64
+  ssh: { password: "1" }
+  nodes:
+    - name: cp-1
+      host: 10.0.0.1
+      role: control-plane
+    - name: worker-1
+      host: 10.0.0.2
+      role: worker
+      taints:
+        - key: dedicated
+          value: gpu
+          effect: InvalidEffect
+`,
+			wantErr: "must be one of NoSchedule, PreferNoSchedule, NoExecute",
+		},
+		{
+			name: "VIP conflicts with node host",
+			yaml: `
+spec:
+  arch: amd64
+  vip: 10.0.0.1
+  ssh: { password: "1" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+    - { name: cp-2, host: 10.0.0.2, role: control-plane }
+    - { name: cp-3, host: 10.0.0.3, role: control-plane }
+`,
+			wantErr: "conflicts with an existing node host",
+		},
 	}
 
 	for _, tc := range tests {
