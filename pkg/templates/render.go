@@ -31,10 +31,24 @@ type KubeVipData struct {
 	KubeconfigPath string
 }
 
+// ClusterTemplateData chứa tham số render file cluster.yaml mẫu đầy đủ hướng dẫn.
+type ClusterTemplateData struct {
+	Arch string
+	HA   bool
+}
+
 func ContainerdService() []byte { return mustRead("files/containerd.service") }
 func KubeletService() []byte    { return mustRead("files/kubelet.service") }
 func KubeadmDropin() []byte     { return mustRead("files/10-kubeadm.conf") }
 func CrictlConfig() []byte      { return mustRead("files/crictl.yaml") }
+
+// RenderClusterTemplate render file cluster.yaml mẫu đầy đủ comment tiếng Việt (Single/Standard/HA + Addons + Registry).
+func RenderClusterTemplate(data ClusterTemplateData) ([]byte, error) {
+	if data.Arch == "" {
+		data.Arch = "auto"
+	}
+	return render("files/cluster_template.yaml.tmpl", data)
+}
 
 // RenderKubeadmInit render file cấu hình kubeadm init (v1beta4) với imagePullPolicy: Never cho Air-gapped.
 func RenderKubeadmInit(data KubeadmInitData) ([]byte, error) {

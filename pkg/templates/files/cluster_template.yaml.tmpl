@@ -1,0 +1,134 @@
+# ==============================================================================
+# vkube — File mẫu cấu hình cụm Kubernetes (Cluster Template)
+# ==============================================================================
+# Hỗ trợ 3 mô hình:
+#   - Single-node: 1 Control Plane (đặt allowSchedulingOnControlPlane: true)
+#   - Standard:    1 Control Plane + N Workers (mặc định bên dưới)
+#   - HA:          3 hoặc 5 Control Planes + kube-vip (bỏ comment mục vip & cp-2/cp-3)
+#
+# Kiểm tra nhanh cấu hình trước khi triển khai:
+#   vkube apply -f cluster.yaml --dry-run
+# ==============================================================================
+
+apiVersion: vkube.io/v1alpha1
+kind: Cluster
+
+metadata:
+  name: my-cluster
+
+spec:
+  # Kiến trúc CPU server đích: "auto" (mặc định, tự phát hiện qua SSH), "amd64" hoặc "arm64"
+  arch: {{ .Arch }}
+
+  # ----------------------------------------------------------------------------
+  # High Availability (HA) — CHỈ CẦN KHI CÓ TỪ 3 CONTROL PLANE TRỞ LÊN
+  # ----------------------------------------------------------------------------
+  # Lưu ý: VIP phải là IP trống cùng subnet/VLAN với CP, nằm ngoài dải DHCP.
+{{- if .HA }}
+  vip: 192.0.2.100
+  # vipInterface: ens160             # Tùy chọn: bỏ trống để tự phát hiện card mạng mặc định
+{{- else }}
+  # vip: 192.0.2.100
+  # vipInterface: ens160             # Tùy chọn: bỏ trống để tự phát hiện card mạng mặc định
+  # controlPlaneEndpoint: 192.0.2.100:6443  # Dùng nếu có Load Balancer ngoài (HAProxy/F5)
+{{- end }}
+
+  # Bảo vệ Control Plane: mặc định FALSE (giữ taint NoSchedule, không chạy app lên CP).
+  # Chỉ đổi thành true nếu dựng cụm Single-node (1 CP và 0 Worker).
+  allowSchedulingOnControlPlane: false
+
+  # ----------------------------------------------------------------------------
+  # Mạng (Networking & CNI)
+  # ----------------------------------------------------------------------------
+  networking:
+    podSubnet: 10.244.0.0/16
+    serviceSubnet: 10.96.0.0/12
+    cni: calico                      # CNI mặc định ở v0.1: calico (v0.2 bổ sung cilium)
+
+  # ----------------------------------------------------------------------------
+  # Private Registry / Harbor nội bộ (Tùy chọn — cho Air-gapped Enterprise)
+  # ----------------------------------------------------------------------------
+  # registry:
+  #   mirrors:
+  #     - host: harbor.internal
+  #       endpoint: https://harbor.internal
+  #       insecure: true
+  #       # caCertPath: ./certs/harbor-ca.crt
+
+  # ----------------------------------------------------------------------------
+  # Core Addons & Custom Manifests (Bật/tắt linh hoạt — 100% cài offline từ Bundle)
+  # ----------------------------------------------------------------------------
+  addons:
+    metricsServer:
+      enabled: true                  # Bắt buộc cho HPA (Autoscale Pod) và `kubectl top`
+    localPathStorage:
+      enabled: true                  # StorageClass mặc định cấp PVC động ngay lập tức
+    metalLB:
+      enabled: false                 # Bật true trên Bare-metal/VMware để cấp IP cho Service LoadBalancer
+      ipRange: 192.0.2.200-192.0.2.220
+    kongIngress:
+      enabled: false                 # Kong Ingress Controller (DB-less API Gateway) — nên bật kèm metalLB
+    # customManifests:               # Danh sách file YAML riêng của bạn (cert-manager, NFS CSI, ArgoCD...)
+    #   - ./my-addons/cert-manager.yaml
+
+  # ----------------------------------------------------------------------------
+  # Cấu hình SSH mặc định cho toàn cụm (từng node bên dưới có thể ghi đè riêng)
+  # ----------------------------------------------------------------------------
+  ssh:
+    user: ubuntu
+    port: 22
+    privateKeyPath: ~/.ssh/id_ed25519
+    # password: "your-password"      # Tùy chọn: dùng mật khẩu SSH thay cho key
+    # sudoPassword: "your-sudo-pass" # Bỏ trống sẽ tự dùng chung password SSH
+
+  # ----------------------------------------------------------------------------
+  # Danh sách máy chủ thành viên (Nodes)
+  # ----------------------------------------------------------------------------
+  nodes:
+    - name: cp-1
+      host: 192.0.2.11
+      role: control-plane
+      # Ghi đè SSH riêng cho node (nếu khác spec.ssh):
+      # user: ubuntu
+      # password: "your-password"
+{{- if .HA }}
+
+    - name: cp-2
+      host: 192.0.2.12
+      role: control-plane
+
+    - name: cp-3
+      host: 192.0.2.13
+      role: control-plane
+{{- else }}
+
+    # Bỏ comment 2 node dưới + bật `vip` ở trên để dựng cụm HA 3 Control Planes:
+    # - name: cp-2
+    #   host: 192.0.2.12
+    #   role: control-plane
+    # - name: cp-3
+    #   host: 192.0.2.13
+    #   role: control-plane
+{{- end }}
+
+    - name: worker-1
+      host: 192.0.2.21
+      role: worker
+      # Tùy chọn: gắn Labels & Taints ngay khi join cụm
+      # labels:
+      #   zone: "rack-a"
+      # taints:
+      #   - key: dedicated
+      #     value: gpu
+      #     effect: NoSchedule
+{{- if .HA }}
+
+    - name: worker-2
+      host: 192.0.2.22
+      role: worker
+{{- else }}
+
+    # - name: worker-2
+    #   host: 192.0.2.22
+    #   role: worker
+{{- end }}

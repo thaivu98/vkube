@@ -55,4 +55,16 @@ mkdir -p "$INSTALL_DIR"
 mv "$TMP_FILE" "${INSTALL_DIR}/vkube"
 
 echo "Đã cài đặt thành công tại ${INSTALL_DIR}/vkube"
-"${INSTALL_DIR}/vkube" version
+echo ""
+"${INSTALL_DIR}/vkube" --help
+echo ""
+echo "=================================================================="
+echo " Bắt đầu nhanh (3 bước dựng cụm Kubernetes):"
+echo "   1. Tạo file cấu hình mẫu cluster.yaml đầy đủ hướng dẫn:"
+echo "        vkube init-config -o cluster.yaml"
+echo "      (Thêm --ha nếu muốn dựng cụm HA 3 Control Planes)"
+echo "   2. Đóng gói Offline Bundle (chỉ cần chạy 1 lần):"
+echo "        vkube bundle build"
+echo "   3. Triển khai cụm Kubernetes:"
+echo "        vkube apply -f cluster.yaml --bundle bundles/vkube-bundle-*.tar.zst"
+echo "=================================================================="
