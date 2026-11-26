@@ -24,11 +24,25 @@ func (e *Engine) Status(ctx context.Context, cfg *api.ClusterConfig) error {
 	}
 	fmt.Fprintf(e.Out, "[Nodes]\n%s\n", nodesRes.Stdout)
 
-	podsRes, err := client.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system get pods -o wide")
+	podsRes, err := client.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -A -o wide")
 	if err != nil {
-		return fmt.Errorf("get kube-system pods: %w", err)
+		return fmt.Errorf("get pods: %w", err)
 	}
-	fmt.Fprintf(e.Out, "[kube-system Pods]\n%s", podsRes.Stdout)
+	fmt.Fprintf(e.Out, "[All Pods]\n%s\n", podsRes.Stdout)
+
+	extraRes, err := client.RunSudo(ctx, `set -e
+echo "[StorageClasses]"
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get sc 2>/dev/null || true
+echo ""
+echo "[LoadBalancer Services]"
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get svc -A --field-selector spec.type=LoadBalancer 2>/dev/null || true
+echo ""
+echo "[Node Metrics (kubectl top nodes)]"
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf top nodes 2>/dev/null || echo "(metrics-server chưa sẵn sàng hoặc chưa bật)"
+`)
+	if err == nil && extraRes.Stdout != "" {
+		fmt.Fprint(e.Out, extraRes.Stdout)
+	}
 	return nil
 }
 
