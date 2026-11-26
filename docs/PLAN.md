@@ -2,16 +2,12 @@
 
 ## Current Status / Handover
 - **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1)
-- **Giai đoạn hiện tại:** Hoàn tất **Phase 2 (Task 3–5: Offline Bundle Builder)** — Sẵn sàng bắt đầu **Phase 3 / Task 6**
-- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Task 6)
+- **Giai đoạn hiện tại:** Hoàn tất **Phase 3 / Task 6 (`pkg/ssh`)** — Sẵn sàng bắt đầu **Phase 4 (Task 7–10: Cluster Provisioning Engine)**
+- **Task đang thực hiện:** Chưa có (sẵn sàng triển khai Phase 4)
 - **Vừa hoàn thành:**
-  - Push commit Task 2 (`6ccdcd6`) lên `origin/main` (kèm `NodeFacts` cache model & tự động nhận diện `arch`).
-  - Hoàn thành trọn bộ **Phase 2 (`pkg/bundle`)**:
-    - Bộ tải binary/tarball/manifest Pure Go HTTP có retry, kiểm tra SHA256 và giải nén `.tar.gz` chống Zip-Slip (`downloader.go`).
-    - Bộ pull & export OCI images Pure Go bằng `go-containerregistry` cho `linux/amd64` và `linux/arm64`, không cần Docker daemon (`images.go`).
-    - Bộ đóng gói `.tar.zst` kèm `bundle-manifest.json` và lệnh `vkube bundle verify` phát hiện sửa đổi/lỗi checksum (`packager.go`, `builder.go`).
-    - Toàn bộ unit test và cross-compile 6 nền tảng pass 100%.
-- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 3 / Task 6** — Implement tầng SSH client pool Pure Go (`pkg/ssh`) hỗ trợ private key & password, xử lý `sudo`, thực thi lệnh song song và truyền Offline Bundle (SFTP + tùy chọn HTTP server nội bộ) — sau đó có thể test SSH trực tiếp lên 2 VM `Master` và `Worker` của lab.
+  - Push commit Phase 2 (`29d5fd1`) lên `origin/main`.
+  - Hoàn thành **Task 6 (`pkg/ssh`)**: SSH client Pure Go (`client.go` hỗ trợ private key + password + keyboard-interactive, `sudo -S` qua stdin không lộ mật khẩu, SFTP upload/write), parallel execution pool (`pool.go`), embedded HTTP `BundleServer` có token bảo mật + tự tìm IP LAN (`http_dist.go`), kèm unit tests và cross-compile 6 nền tảng pass 100%.
+- **Bước tiếp theo (Next Action):** Bắt đầu **Phase 4 (`pkg/templates` & `pkg/engine`, Task 7–10)** — Nhúng template (`containerd`, `kubelet.service`, `kubeadm-config`, `kube-vip`), implement `preflight` (thu thập & cache `NodeFacts` 1 lần duy nhất) → `os-prep` → `runtime & ctr images import` → `kubeadm init/join` → cài **Calico** offline, `vkube status` và `vkube reset`, rồi test E2E trực tiếp trên 2 VM lab `Master` & `Worker`!
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -49,7 +45,7 @@
 ---
 
 ## Phase 3: Tầng SSH Cross-platform & Phân phối Artifact (`pkg/ssh`)
-- [ ] **Task 6:** Implement SSH client pool bằng Pure Go (hỗ trợ private key & password, xử lý `sudo`, thực thi lệnh song song với log tách riêng theo từng node) và cơ chế đẩy artifact (SFTP + tùy chọn HTTP server nội bộ để phát tán nhanh trong LAN).
+- [x] **Task 6:** Implement SSH client pool bằng Pure Go (hỗ trợ private key & password, xử lý `sudo`, thực thi lệnh song song với log tách riêng theo từng node) và cơ chế đẩy artifact (SFTP + tùy chọn HTTP server nội bộ để phát tán nhanh trong LAN).
 
 ---
 
