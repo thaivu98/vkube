@@ -6,7 +6,7 @@ localAPIEndpoint:
 nodeRegistration:
   name: "{{ .NodeName }}"
   criSocket: "unix:///run/containerd/containerd.sock"
-  imagePullPolicy: Never
+  imagePullPolicy: {{ .ImagePullPolicy }}
 {{- if .CertificateKey }}
 certificateKey: "{{ .CertificateKey }}"
 {{- end }}

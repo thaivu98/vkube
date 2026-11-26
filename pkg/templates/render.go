@@ -21,14 +21,16 @@ type KubeadmInitData struct {
 	ServiceSubnet        string
 	CertificateKey       string
 	CertSANs             []string
+	ImagePullPolicy      string
 }
 
 // KubeVipData chứa tham số render static pod kube-vip.yaml cho HA Control Plane.
 type KubeVipData struct {
-	Image          string
-	VIP            string
-	Interface      string
-	KubeconfigPath string
+	Image           string
+	VIP             string
+	Interface       string
+	KubeconfigPath  string
+	ImagePullPolicy string
 }
 
 // ClusterTemplateData chứa tham số render file cluster.yaml mẫu đầy đủ hướng dẫn.
@@ -50,8 +52,11 @@ func RenderClusterTemplate(data ClusterTemplateData) ([]byte, error) {
 	return render("files/cluster_template.yaml.tmpl", data)
 }
 
-// RenderKubeadmInit render file cấu hình kubeadm init (v1beta4) với imagePullPolicy: Never cho Air-gapped.
+// RenderKubeadmInit render file cấu hình kubeadm init (v1beta4).
 func RenderKubeadmInit(data KubeadmInitData) ([]byte, error) {
+	if data.ImagePullPolicy == "" {
+		data.ImagePullPolicy = "Never"
+	}
 	return render("files/kubeadm-init.yaml.tmpl", data)
 }
 
@@ -59,6 +64,9 @@ func RenderKubeadmInit(data KubeadmInitData) ([]byte, error) {
 func RenderKubeVip(data KubeVipData) ([]byte, error) {
 	if data.KubeconfigPath == "" {
 		data.KubeconfigPath = "/etc/kubernetes/admin.conf"
+	}
+	if data.ImagePullPolicy == "" {
+		data.ImagePullPolicy = "Never"
 	}
 	return render("files/kube-vip.yaml.tmpl", data)
 }

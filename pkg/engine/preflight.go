@@ -10,6 +10,7 @@ import (
 
 	"github.com/thaivu98/vkube/pkg/api"
 	"github.com/thaivu98/vkube/pkg/ssh"
+	"github.com/thaivu98/vkube/pkg/versions"
 )
 
 const preflightProbeScript = `set -euo pipefail
@@ -172,8 +173,10 @@ func NewEngine(out io.Writer) *Engine {
 // ClusterState giữ ngữ cảnh chạy xuyên suốt các giai đoạn của lệnh `vkube apply`.
 type ClusterState struct {
 	Config         *api.ClusterConfig
+	OnlineMode     bool
 	BundlePath     string
 	BundleManifest *api.BundleManifest
+	ResolvedBOM    *versions.ResolvedBOM
 	Pool           *ssh.Pool
 	Facts          map[string]*api.NodeFacts
 }

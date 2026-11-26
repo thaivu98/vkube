@@ -12,13 +12,14 @@ func newApplyCmd() *cobra.Command {
 	var (
 		configFile    string
 		bundleFile    string
+		manifestPath  string
 		kubeconfigOut string
 		dryRun        bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Triển khai cụm Vanilla Kubernetes từ cluster.yaml và Offline Bundle",
+		Short: "Triển khai cụm Vanilla Kubernetes (Online trực tiếp hoặc Air-gapped với --bundle)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if configFile == "" {
 				return fmt.Errorf("cần chỉ định file cấu hình cụm qua cờ -f / --file")
@@ -29,7 +30,11 @@ func newApplyCmd() *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Cluster:       %s (arch: linux/%s, CNI: %s)\n", cfg.Metadata.Name, cfg.Spec.Arch, cfg.Spec.Networking.CNI)
+			modeLabel := "Online (trực tiếp)"
+			if bundleFile != "" {
+				modeLabel = "Air-gapped (--bundle)"
+			}
+			fmt.Fprintf(out, "Cluster:       %s (arch: linux/%s, CNI: %s, mode: %s)\n", cfg.Metadata.Name, cfg.Spec.Arch, cfg.Spec.Networking.CNI, modeLabel)
 			fmt.Fprintf(out, "ControlPlane:  %d node(s)", len(cfg.ControlPlanes()))
 			if cfg.Spec.ControlPlaneEndpoint != "" {
 				fmt.Fprintf(out, " (endpoint: %s)", cfg.Spec.ControlPlaneEndpoint)
@@ -42,17 +47,19 @@ func newApplyCmd() *cobra.Command {
 				fmt.Fprintln(out, "\nDry-run hoàn tất: cấu hình cluster.yaml hợp lệ.")
 				return nil
 			}
-			if bundleFile == "" {
-				return fmt.Errorf("cần chỉ định file Offline Bundle qua cờ --bundle")
-			}
 
 			eng := engine.NewEngine(out)
-			return eng.Apply(cmd.Context(), cfg, bundleFile, kubeconfigOut)
+			return eng.Apply(cmd.Context(), cfg, engine.ApplyOptions{
+				BundlePath:    bundleFile,
+				ManifestPath:  manifestPath,
+				KubeconfigOut: kubeconfigOut,
+			})
 		},
 	}
 
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "Đường dẫn tới file cluster.yaml (bắt buộc)")
-	cmd.Flags().StringVarP(&bundleFile, "bundle", "b", "", "Đường dẫn tới file Offline Bundle (.tar.zst)")
+	cmd.Flags().StringVarP(&bundleFile, "bundle", "b", "", "Đường dẫn tới Offline Bundle (.tar.zst) cho môi trường Air-gapped (bỏ trống để cài Online trực tiếp)")
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Đường dẫn file BOM (versions.yaml) tùy chỉnh khi cài Online")
 	cmd.Flags().StringVar(&kubeconfigOut, "kubeconfig-out", "", "Đường dẫn lưu file kubeconfig sau khi cài xong (mặc định: kubeconfig-<cluster>.yaml)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Chỉ kiểm tra cấu hình cluster.yaml và in tóm tắt cụm")
 	return cmd

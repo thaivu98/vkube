@@ -7,7 +7,7 @@ spec:
   containers:
     - name: kube-vip
       image: {{ .Image }}
-      imagePullPolicy: Never
+      imagePullPolicy: {{ .ImagePullPolicy }}
       args:
         - manager
       env:

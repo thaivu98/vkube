@@ -68,27 +68,32 @@ git clone https://github.com/thaivu98/vkube.git && cd vkube
 
 ---
 
-### Quy trình dựng cụm Kubernetes (3 bước)
+### Quy trình dựng cụm Kubernetes
+
+#### Chế độ 1: Online trực tiếp *(máy chủ có Internet — chỉ 2 lệnh, không cần build bundle!)*
 
 ```bash
-# Bước 1: Đóng gói Offline Bundle trên máy có Internet (chỉ làm 1 lần ~2.5–3 phút, tái sử dụng cho nhiều cụm)
-# Mặc định tự nhận kiến trúc máy hiện tại; thêm --arch amd64 hoặc --arch arm64 khi build chéo
-vkube bundle build --arch amd64
+# Bước 1: Sinh file cấu hình mẫu cluster.yaml đầy đủ hướng dẫn (thêm --ha cho cụm 3 CP)
+vkube init-config -o cluster.yaml
+# -> Điền IP, SSH key/password, VIP (nếu HA) và bật/tắt addons trong cluster.yaml
 
-# (Tùy chọn) Kiểm tra tính toàn vẹn SHA256 của Offline Bundle
+# Bước 2: Triển khai cụm Kubernetes ngay lập tức (~2–3 phút)
+vkube apply -f cluster.yaml
+
+# Bước 3: Kiểm tra trạng thái cụm (Nodes, All Pods, StorageClasses, LoadBalancer, kubectl top)
+vkube status -f cluster.yaml
+```
+
+#### Chế độ 2: Air-gapped *(mạng kín không Internet — dùng Offline Bundle)*
+
+```bash
+# Trên máy CÓ Internet: tải sẵn binary vkube và đóng gói Offline Bundle (làm 1 lần, dùng cho nhiều cụm)
+vkube bundle build --arch amd64
 vkube bundle verify bundles/vkube-bundle-v1.32.2-vkube.1-linux-amd64.tar.zst
 
-# Bước 2: Tạo file cấu hình cụm (hoặc sao chép từ clusters/cluster_template.yaml)
-vkube init-config -o clusters/my-cluster.local.yaml
-# -> Chỉnh sửa IP, SSH key/password, VIP (nếu HA) và bật/tắt addons trong clusters/my-cluster.local.yaml
-vkube apply -f clusters/my-cluster.local.yaml --dry-run
-
-# Bước 3: Triển khai cụm Kubernetes hoàn toàn offline (~2–3 phút)
-vkube apply -f clusters/my-cluster.local.yaml \
-  --bundle bundles/vkube-bundle-v1.32.2-vkube.1-linux-amd64.tar.zst
-
-# Bước 4: Kiểm tra trạng thái cụm (Nodes, All Pods, StorageClasses, LoadBalancer, kubectl top)
-vkube status -f clusters/my-cluster.local.yaml
+# Chép 2 file (binary vkube + file .tar.zst) vào vùng Air-gapped rồi chạy:
+vkube init-config -o cluster.yaml
+vkube apply -f cluster.yaml --bundle vkube-bundle-v1.32.2-vkube.1-linux-amd64.tar.zst
 ```
 
 Sau khi hoàn tất, `vkube` tự động xuất file `kubeconfig-<ten-cum>.yaml` ngay tại thư mục hiện tại:

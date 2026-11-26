@@ -14,19 +14,43 @@ import (
 	"github.com/thaivu98/vkube/pkg/bundle"
 	"github.com/thaivu98/vkube/pkg/ssh"
 	"github.com/thaivu98/vkube/pkg/templates"
+	"github.com/thaivu98/vkube/pkg/versions"
 )
 
-// Apply thực thi trọn gói pipeline triển khai cụm Vanilla Kubernetes từ Offline Bundle.
-func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, bundlePath, kubeconfigOut string) error {
-	start := time.Now()
+// ApplyOptions chứa các tham số chạy cho lệnh `vkube apply`.
+type ApplyOptions struct {
+	BundlePath    string // Nếu có -> chế độ Air-gapped; nếu rỗng -> chế độ Online trực tiếp
+	ManifestPath  string // File BOM versions.yaml tùy chỉnh (dùng ở chế độ Online)
+	KubeconfigOut string
+}
 
-	fmt.Fprintf(e.Out, "==> [0/6] Xác thực Offline Bundle (%s)...\n", bundlePath)
-	manifest, err := bundle.Verify(bundlePath)
-	if err != nil {
-		return fmt.Errorf("verify offline bundle: %w", err)
+// Apply thực thi trọn gói pipeline triển khai cụm Vanilla Kubernetes (hỗ trợ cả Online trực tiếp lẫn Air-gapped Offline Bundle).
+func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, opts ApplyOptions) error {
+	start := time.Now()
+	onlineMode := strings.TrimSpace(opts.BundlePath) == ""
+
+	var (
+		manifest *api.BundleManifest
+		bom      *versions.BOM
+		err      error
+	)
+
+	if onlineMode {
+		fmt.Fprintf(e.Out, "==> [0/6] Chế độ Online trực tiếp (không cần Offline Bundle) — đọc BOM...\n")
+		bom, err = versions.Load(opts.ManifestPath)
+		if err != nil {
+			return fmt.Errorf("load BOM manifest: %w", err)
+		}
+		fmt.Fprintf(e.Out, "  [bom]       %s | Kubernetes %s\n", bom.ReleaseTag, bom.Components["kubernetes"])
+	} else {
+		fmt.Fprintf(e.Out, "==> [0/6] Chế độ Air-gapped — xác thực Offline Bundle (%s)...\n", opts.BundlePath)
+		manifest, err = bundle.Verify(opts.BundlePath)
+		if err != nil {
+			return fmt.Errorf("verify offline bundle: %w", err)
+		}
+		fmt.Fprintf(e.Out, "  [bundle]    %s | Kubernetes %s | arch=linux/%s | %d files OK\n",
+			manifest.ReleaseTag, manifest.KubernetesVersion, manifest.Arch, len(manifest.Files))
 	}
-	fmt.Fprintf(e.Out, "  [bundle]    %s | Kubernetes %s | arch=linux/%s | %d files OK\n",
-		manifest.ReleaseTag, manifest.KubernetesVersion, manifest.Arch, len(manifest.Files))
 
 	pool, err := ssh.ConnectAll(ctx, cfg, e.Out)
 	if err != nil {
@@ -36,7 +60,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, bundlePath, 
 
 	state := &ClusterState{
 		Config:         cfg,
-		BundlePath:     bundlePath,
+		OnlineMode:     onlineMode,
+		BundlePath:     opts.BundlePath,
 		BundleManifest: manifest,
 		Pool:           pool,
 		Facts:          make(map[string]*api.NodeFacts, len(cfg.Spec.Nodes)),
@@ -45,6 +70,24 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, bundlePath, 
 	if err := e.RunPreflight(ctx, state); err != nil {
 		return err
 	}
+
+	// Ở chế độ Online, sau khi Preflight phát hiện chính xác kiến trúc các node thì render URL tải về từ BOM.
+	if onlineMode {
+		cp1 := cfg.ControlPlanes()[0]
+		detectedArch := state.Facts[cp1.Name].Arch
+		resolved, err := bom.Resolve(detectedArch)
+		if err != nil {
+			return fmt.Errorf("resolve BOM for arch %s: %w", detectedArch, err)
+		}
+		state.ResolvedBOM = resolved
+		state.BundleManifest = &api.BundleManifest{
+			ReleaseTag:        resolved.ReleaseTag,
+			KubernetesVersion: resolved.KubernetesVersion,
+			Arch:              resolved.Arch,
+			Components:        resolved.Components,
+		}
+	}
+
 	if err := e.RunOSPrep(ctx, state); err != nil {
 		return err
 	}
@@ -54,7 +97,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, bundlePath, 
 	if err := e.runKubeadmCluster(ctx, state); err != nil {
 		return err
 	}
-	if err := e.runCalicoAndPostConfig(ctx, state, kubeconfigOut); err != nil {
+	if err := e.runCalicoAndPostConfig(ctx, state, opts.KubeconfigOut); err != nil {
 		return err
 	}
 	if err := e.runAddons(ctx, state); err != nil {
@@ -99,6 +142,11 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 		certSANs = append(certSANs, cp.Host, cp.Name)
 	}
 
+	pullPolicy := "Never"
+	if state.OnlineMode {
+		pullPolicy = "IfNotPresent"
+	}
+
 	initYAML, err := templates.RenderKubeadmInit(templates.KubeadmInitData{
 		ClusterName:          state.Config.Metadata.Name,
 		KubernetesVersion:    state.BundleManifest.KubernetesVersion,
@@ -109,6 +157,7 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 		ServiceSubnet:        state.Config.Spec.Networking.ServiceSubnet,
 		CertificateKey:       certKey,
 		CertSANs:             certSANs,
+		ImagePullPolicy:      pullPolicy,
 	})
 	if err != nil {
 		return fmt.Errorf("render kubeadm-init.yaml: %w", err)
@@ -203,11 +252,16 @@ func (e *Engine) writeKubeVipManifest(ctx context.Context, state *ClusterState, 
 		return fmt.Errorf("bundle manifest missing kube_vip component version")
 	}
 
+	pullPolicy := "Never"
+	if state.OnlineMode {
+		pullPolicy = "IfNotPresent"
+	}
 	manifestBytes, err := templates.RenderKubeVip(templates.KubeVipData{
-		Image:          fmt.Sprintf("ghcr.io/kube-vip/kube-vip:%s", kubeVipVer),
-		VIP:            state.Config.Spec.VIP,
-		Interface:      iface,
-		KubeconfigPath: kubeconfigPath,
+		Image:           fmt.Sprintf("ghcr.io/kube-vip/kube-vip:%s", kubeVipVer),
+		VIP:             state.Config.Spec.VIP,
+		Interface:       iface,
+		KubeconfigPath:  kubeconfigPath,
+		ImagePullPolicy: pullPolicy,
 	})
 	if err != nil {
 		return err
