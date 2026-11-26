@@ -169,6 +169,15 @@ func (c *ClusterConfig) Validate() error {
 		}
 	}
 
+	if c.Spec.Addons.MetalLB.Enabled && strings.TrimSpace(c.Spec.Addons.MetalLB.IPRange) == "" {
+		errs = append(errs, "spec.addons.metalLB.ipRange is required when metalLB is enabled (e.g. 192.0.2.200-192.0.2.220)")
+	}
+	for i, m := range c.Spec.Registry.Mirrors {
+		if strings.TrimSpace(m.Host) == "" || strings.TrimSpace(m.Endpoint) == "" {
+			errs = append(errs, fmt.Sprintf("spec.registry.mirrors[%d] must specify both host and endpoint", i))
+		}
+	}
+
 	if len(errs) > 0 {
 		return errors.New("invalid cluster config:\n  - " + strings.Join(errs, "\n  - "))
 	}

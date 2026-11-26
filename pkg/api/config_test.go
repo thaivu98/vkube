@@ -210,6 +210,20 @@ spec:
 `,
 			wantErr: "conflicts with an existing node host",
 		},
+		{
+			name: "metalLB enabled without ipRange",
+			yaml: `
+spec:
+  arch: arm64
+  addons:
+    metalLB:
+      enabled: true
+  ssh: { password: "1" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`,
+			wantErr: "spec.addons.metalLB.ipRange is required",
+		},
 	}
 
 	for _, tc := range tests {

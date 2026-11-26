@@ -56,6 +56,33 @@ spec:
     cni: calico                      # CNI mặc định ở v0.1: calico (v0.2 bổ sung cilium)
 
   # ----------------------------------------------------------------------------
+  # Cấu hình Private Registry / Harbor nội bộ (Tùy chọn — cho Air-gapped Enterprise)
+  # ----------------------------------------------------------------------------
+  # vkube sẽ tự sinh /etc/containerd/certs.d/<host>/hosts.toml trên toàn bộ nodes.
+  # registry:
+  #   mirrors:
+  #     - host: harbor.internal
+  #       endpoint: https://harbor.internal
+  #       insecure: true               # Bật true nếu dùng self-signed TLS chưa gắn CA
+  #       # caCertPath: ./certs/harbor-ca.crt  # Hoặc trỏ file CA cert cục bộ từ máy Deployer
+
+  # ----------------------------------------------------------------------------
+  # Core Addons & Custom Manifests (Bật/tắt linh hoạt — 100% cài offline từ Bundle)
+  # ----------------------------------------------------------------------------
+  addons:
+    metricsServer:
+      enabled: true                  # Bắt buộc cho HPA (Autoscale Pod) và `kubectl top`
+    localPathStorage:
+      enabled: true                  # StorageClass mặc định cấp PVC động ngay lập tức
+    metalLB:
+      enabled: false                 # Bật true trên Bare-metal/VMware để cấp IP cho Service type: LoadBalancer
+      ipRange: 192.0.2.200-192.0.2.220 # Bắt buộc khai báo dải IP trống cùng subnet LAN khi bật metalLB
+    kongIngress:
+      enabled: false                 # Kong Ingress Controller (DB-less API Gateway) — nên bật kèm metalLB
+    # customManifests:               # Tùy chọn: danh sách file YAML riêng của bạn (cert-manager, NFS CSI, ArgoCD...)
+    #   - ./my-addons/cert-manager.yaml
+
+  # ----------------------------------------------------------------------------
   # Cấu hình SSH mặc định cho toàn cụm (từng node bên dưới có thể ghi đè riêng)
   # ----------------------------------------------------------------------------
   ssh:

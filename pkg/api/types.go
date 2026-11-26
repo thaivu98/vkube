@@ -86,10 +86,47 @@ type ClusterSpec struct {
 	AllowSchedulingOnControlPlane bool `yaml:"allowSchedulingOnControlPlane,omitempty" json:"allowSchedulingOnControlPlane,omitempty"`
 	// Networking cấu hình dải mạng Pod, Service và CNI.
 	Networking NetworkingConfig `yaml:"networking,omitempty" json:"networking,omitempty"`
+	// Registry cấu hình Private Registry / Harbor Mirror cho containerd (Air-gapped).
+	Registry RegistryConfig `yaml:"registry,omitempty" json:"registry,omitempty"`
+	// Addons cho phép bật/tắt các Core Addons (Metrics Server, Local Path CSI, MetalLB, Kong Ingress) và customManifests.
+	Addons AddonsConfig `yaml:"addons,omitempty" json:"addons,omitempty"`
 	// SSH là cấu hình SSH mặc định cho toàn cụm (từng node có thể ghi đè).
 	SSH SSHConfig `yaml:"ssh,omitempty" json:"ssh,omitempty"`
 	// Nodes là danh sách các máy chủ thành viên trong cụm.
 	Nodes []NodeConfig `yaml:"nodes" json:"nodes"`
+}
+
+// RegistryConfig khai báo danh sách Private Registry Mirror (ví dụ Harbor, Nexus nội bộ).
+type RegistryConfig struct {
+	Mirrors []RegistryMirror `yaml:"mirrors,omitempty" json:"mirrors,omitempty"`
+}
+
+// RegistryMirror cấu hình 1 registry mirror trong /etc/containerd/certs.d/<host>/hosts.toml.
+type RegistryMirror struct {
+	Host       string `yaml:"host" json:"host"`
+	Endpoint   string `yaml:"endpoint" json:"endpoint"`
+	Insecure   bool   `yaml:"insecure,omitempty" json:"insecure,omitempty"`
+	CACertPath string `yaml:"caCertPath,omitempty" json:"caCertPath,omitempty"`
+}
+
+// AddonsConfig quản lý các Core Addons bật/tắt linh hoạt và các manifest tùy chỉnh.
+type AddonsConfig struct {
+	MetricsServer    ToggleAddon  `yaml:"metricsServer,omitempty" json:"metricsServer,omitempty"`
+	LocalPathStorage ToggleAddon  `yaml:"localPathStorage,omitempty" json:"localPathStorage,omitempty"`
+	MetalLB          MetalLBAddon `yaml:"metalLB,omitempty" json:"metalLB,omitempty"`
+	KongIngress      ToggleAddon  `yaml:"kongIngress,omitempty" json:"kongIngress,omitempty"`
+	CustomManifests  []string     `yaml:"customManifests,omitempty" json:"customManifests,omitempty"`
+}
+
+// ToggleAddon đại diện cho một addon bật/tắt đơn giản.
+type ToggleAddon struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+}
+
+// MetalLBAddon cấu hình MetalLB L2 LoadBalancer cho môi trường Bare-metal / On-premise.
+type MetalLBAddon struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	IPRange string `yaml:"ipRange,omitempty" json:"ipRange,omitempty"`
 }
 
 // NetworkingConfig định nghĩa thông số mạng của cụm Kubernetes.

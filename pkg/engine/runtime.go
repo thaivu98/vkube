@@ -106,6 +106,8 @@ mv -f /tmp/vkube-crictl.yaml /etc/crictl.yaml
 /usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
 sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
+sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml
+mkdir -p /etc/containerd/certs.d
 
 systemctl daemon-reload
 systemctl enable --now containerd
@@ -134,6 +136,14 @@ rm -rf %s /tmp/vkube-bundle*
 		fmt.Fprintf(e.Out, "  [runtime]   %-12s cài đặt containerd, kubelet & nạp OCI images...\n", node.Name)
 		if _, err := r.RunSudo(ctx, installScript); err != nil {
 			return fmt.Errorf("install runtime & import images: %w", err)
+		}
+		if len(state.Config.Spec.Registry.Mirrors) > 0 {
+			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r); err != nil {
+				return fmt.Errorf("configure private registry mirrors: %w", err)
+			}
+			if _, err := r.RunSudo(ctx, "systemctl restart containerd"); err != nil {
+				return fmt.Errorf("restart containerd after registry mirror config: %w", err)
+			}
 		}
 		fmt.Fprintf(e.Out, "  [runtime]   %-12s OK\n", node.Name)
 		return nil

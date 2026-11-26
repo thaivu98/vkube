@@ -107,3 +107,21 @@ func TestBuildHostsBlock(t *testing.T) {
 		t.Fatalf("unexpected hosts block:\n%s", block)
 	}
 }
+
+func TestRenderRegistryHostsToml(t *testing.T) {
+	toml := renderRegistryHostsToml(api.RegistryMirror{
+		Host:     "harbor.internal",
+		Endpoint: "https://10.0.0.50:8443",
+		Insecure: true,
+	}, "/etc/containerd/certs.d/harbor.internal/ca.crt")
+	for _, want := range []string{
+		`server = "https://harbor.internal"`,
+		`[host."https://10.0.0.50:8443"]`,
+		`skip_verify = true`,
+		`ca = "/etc/containerd/certs.d/harbor.internal/ca.crt"`,
+	} {
+		if !strings.Contains(toml, want) {
+			t.Errorf("expected %q in rendered hosts.toml:\n%s", want, toml)
+		}
+	}
+}

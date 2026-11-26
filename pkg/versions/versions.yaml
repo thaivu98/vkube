@@ -15,6 +15,13 @@ components:
   coredns: v1.11.3
   pause: "3.10"
   etcd: 3.5.16-0
+  # Core Addons (bật/tắt linh hoạt trong cluster.yaml)
+  metrics_server: v0.7.2
+  local_path: v0.0.30
+  metallb: v0.14.9
+  kong_manifest: v2.12.5
+  kong_gateway: "3.4"
+  kong_controller: "2.12"
 
 artifacts:
   - name: kubeadm
@@ -70,6 +77,30 @@ artifacts:
     url: https://raw.githubusercontent.com/projectcalico/calico/{{.Version}}/manifests/calico.yaml
     dest: manifests/calico.yaml
 
+  - name: metrics-server-manifest
+    component: metrics_server
+    type: manifest
+    url: https://github.com/kubernetes-sigs/metrics-server/releases/download/{{.Version}}/components.yaml
+    dest: manifests/metrics-server.yaml
+
+  - name: local-path-manifest
+    component: local_path
+    type: manifest
+    url: https://raw.githubusercontent.com/rancher/local-path-provisioner/{{.Version}}/deploy/local-path-storage.yaml
+    dest: manifests/local-path-storage.yaml
+
+  - name: metallb-manifest
+    component: metallb
+    type: manifest
+    url: https://raw.githubusercontent.com/metallb/metallb/{{.Version}}/config/manifests/metallb-native.yaml
+    dest: manifests/metallb-native.yaml
+
+  - name: kong-manifest
+    component: kong_manifest
+    type: manifest
+    url: https://raw.githubusercontent.com/Kong/kubernetes-ingress-controller/{{.Version}}/deploy/single/all-in-one-dbless.yaml
+    dest: manifests/kong-dbless.yaml
+
 imageGroups:
   - name: kubernetes
     dest: images/kubernetes.tar
@@ -93,3 +124,26 @@ imageGroups:
     dest: images/kube-vip.tar
     images:
       - ghcr.io/kube-vip/kube-vip:{{.Components.kube_vip}}
+
+  - name: metrics-server
+    dest: images/metrics-server.tar
+    images:
+      - registry.k8s.io/metrics-server/metrics-server:{{.Components.metrics_server}}
+
+  - name: local-path
+    dest: images/local-path.tar
+    images:
+      - docker.io/rancher/local-path-provisioner:{{.Components.local_path}}
+      - docker.io/library/busybox:latest
+
+  - name: metallb
+    dest: images/metallb.tar
+    images:
+      - quay.io/metallb/controller:{{.Components.metallb}}
+      - quay.io/metallb/speaker:{{.Components.metallb}}
+
+  - name: kong
+    dest: images/kong.tar
+    images:
+      - docker.io/library/kong:{{.Components.kong_gateway}}
+      - docker.io/kong/kubernetes-ingress-controller:{{.Components.kong_controller}}

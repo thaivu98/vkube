@@ -57,6 +57,9 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, bundlePath, 
 	if err := e.runCalicoAndPostConfig(ctx, state, kubeconfigOut); err != nil {
 		return err
 	}
+	if err := e.runAddons(ctx, state); err != nil {
+		return err
+	}
 
 	fmt.Fprintf(e.Out, "\nTriển khai cụm %q thành công sau %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Second))
 	return nil

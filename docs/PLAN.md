@@ -10,6 +10,7 @@
     - Kiểm thử E2E thành công trên 2 VM Ubuntu ARM64 thật (`master` + `worker`): triển khai trọn bộ Vanilla Kubernetes `v1.32.2` + `containerd 1.7.25` + `Calico v3.29.2` offline chỉ mất **2 phút 4 giây (`2m4s`)** từ OS trắng đến khi toàn bộ node `Ready`!
     - Phát hiện và vá ngay 2 lỗi thực tế quan trọng trong quá trình test thật: ngưỡng RAM `MemTotal` trên VM 2GB ARM64 (`1624 MB`) và chuyển staging bundle từ `/tmp` (`tmpfs`) sang `/var/tmp` & `/var/lib/vkube/staging` trên ổ đĩa thật.
     - Bổ sung hướng dẫn lab tại `lab/README.md`.
+    - Bổ sung **Modular Core Addons** bật/tắt linh hoạt (`metricsServer`, `localPathStorage`, `metalLB`, **`kongIngress`** DB-less + `customManifests`) và hỗ trợ **Private Registry / Harbor mirror** (`spec.registry.mirrors` -> `/etc/containerd/certs.d/`) quản lý 100% trong BOM `versions.yaml`.
 - **Bước tiếp theo (Next Action):** Tiếp tục kiểm thử thực tế (networking Calico, `vkube reset`, test HA / air-gapped) và chỉnh sửa hoàn thiện trước khi gắn tag phát hành **`v1.32.2-vkube.1`**.
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
