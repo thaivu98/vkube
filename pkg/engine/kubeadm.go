@@ -67,9 +67,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, opts ApplyOp
 		Facts:          make(map[string]*api.NodeFacts, len(cfg.Spec.Nodes)),
 	}
 
+	tStage := time.Now()
 	if err := e.RunPreflight(ctx, state); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    Preflight: %s\n", time.Since(tStage).Round(time.Millisecond))
 
 	// Ở chế độ Online, sau khi Preflight phát hiện chính xác kiến trúc các node thì render URL tải về từ BOM.
 	if onlineMode {
@@ -88,23 +90,43 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, opts ApplyOp
 		}
 	}
 
+	tStage = time.Now()
 	if err := e.RunOSPrep(ctx, state); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    OS Prep: %s\n", time.Since(tStage).Round(time.Millisecond))
+
+	tStage = time.Now()
 	if err := e.RunRuntimeAndArtifacts(ctx, state); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    Runtime & Artifacts: %s\n", time.Since(tStage).Round(time.Millisecond))
+
+	tStage = time.Now()
 	if err := e.runKubeadmCluster(ctx, state); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    kubeadm init/join: %s\n", time.Since(tStage).Round(time.Millisecond))
+
+	tStage = time.Now()
 	if err := e.runCalicoAndPostConfig(ctx, state, opts.KubeconfigOut); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    Calico & Nodes Ready: %s\n", time.Since(tStage).Round(time.Millisecond))
+
+	tStage = time.Now()
 	if err := e.runAddons(ctx, state); err != nil {
 		return err
 	}
+	fmt.Fprintf(e.Out, "  [timing]    Addons: %s\n", time.Since(tStage).Round(time.Millisecond))
 
-	fmt.Fprintf(e.Out, "\nTriển khai cụm %q thành công sau %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Second))
+	// Tự động hiển thị trạng thái tổng quan của cụm ngay sau khi triển khai xong.
+	cp1 := cfg.ControlPlanes()[0]
+	if cp1Runner, err := pool.Get(cp1.Name); err == nil {
+		_ = e.printClusterStatus(ctx, cfg.Metadata.Name, cp1, cp1Runner)
+	}
+
+	fmt.Fprintf(e.Out, "\nTriển khai cụm %q thành công — Tổng thời gian: %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Second))
 	return nil
 }
 
@@ -274,7 +296,11 @@ func (e *Engine) writeKubeVipManifest(ctx context.Context, state *ClusterState, 
 }
 
 func (e *Engine) runCalicoAndPostConfig(ctx context.Context, state *ClusterState, kubeconfigOut string) error {
-	fmt.Fprintf(e.Out, "==> [6/6] Cài đặt Calico CNI offline, áp dụng Labels/Taints & xuất kubeconfig...\n")
+	mode := "Air-gapped"
+	if state.OnlineMode {
+		mode = "Online"
+	}
+	fmt.Fprintf(e.Out, "==> [6/6] Cài đặt Calico CNI (%s), áp dụng Labels/Taints & xuất kubeconfig...\n", mode)
 	cp1 := state.Config.ControlPlanes()[0]
 	cp1Runner, err := state.Pool.Get(cp1.Name)
 	if err != nil {
@@ -321,11 +347,27 @@ sed -i 's|#   value: "192.168.0.0/16"|  value: "%s"|g' "$CALICO_FILE"
 		}
 	}
 
-	// Kéo file kubeconfig về máy Deployer
+	// Cài sẵn ~/.kube/config cho user SSH trên Primary Control Plane để gõ `kubectl` chạy ngay
+	cp1User := state.Config.EffectiveSSH(cp1).User
+	setupKubeCmd := fmt.Sprintf(`set -euo pipefail
+HOME_DIR="$(getent passwd %s | cut -d: -f6)"
+if [ -n "$HOME_DIR" ]; then
+  mkdir -p "$HOME_DIR/.kube"
+  cp -f /etc/kubernetes/admin.conf "$HOME_DIR/.kube/config"
+  chown -R %s:%s "$HOME_DIR/.kube"
+  chmod 0600 "$HOME_DIR/.kube/config"
+fi`, cp1User, cp1User, cp1User)
+	_, _ = cp1Runner.RunSudo(ctx, setupKubeCmd)
+
+	// Kéo file kubeconfig về máy Deployer và chuẩn hóa context name theo đúng metadata.name của cụm
 	res, err := cp1Runner.RunSudo(ctx, "cat /etc/kubernetes/admin.conf")
 	if err != nil {
 		return fmt.Errorf("fetch admin.conf from %s: %w", cp1.Name, err)
 	}
+	kubeconfigContent := strings.ReplaceAll(res.Stdout,
+		fmt.Sprintf("kubernetes-admin@%s", state.Config.Metadata.Name),
+		state.Config.Metadata.Name,
+	)
 	if kubeconfigOut == "" {
 		kubeconfigOut = fmt.Sprintf("kubeconfig-%s.yaml", state.Config.Metadata.Name)
 	}
@@ -334,21 +376,16 @@ sed -i 's|#   value: "192.168.0.0/16"|  value: "%s"|g' "$CALICO_FILE"
 			return err
 		}
 	}
-	if err := os.WriteFile(kubeconfigOut, []byte(res.Stdout), 0o600); err != nil {
+	if err := os.WriteFile(kubeconfigOut, []byte(kubeconfigContent), 0o600); err != nil {
 		return fmt.Errorf("write local kubeconfig %q: %w", kubeconfigOut, err)
 	}
-	fmt.Fprintf(e.Out, "  [kubeconfig] Đã lưu kubeconfig tại: %s\n", kubeconfigOut)
+	fmt.Fprintf(e.Out, "  [kubeconfig] Đã lưu kubeconfig tại: %s (context: %s)\n", kubeconfigOut, state.Config.Metadata.Name)
 
 	// Chờ toàn bộ nodes đạt trạng thái Ready (tối đa 3 phút)
 	fmt.Fprintf(e.Out, "  [verify]    Đang chờ toàn bộ %d node(s) đạt trạng thái Ready...\n", len(state.Config.Spec.Nodes))
 	waitCmd := "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=180s"
 	if _, err := cp1Runner.RunSudo(ctx, waitCmd); err != nil {
 		return fmt.Errorf("wait for nodes Ready: %w", err)
-	}
-
-	nodesOut, _ := cp1Runner.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o wide")
-	if nodesOut.Stdout != "" {
-		fmt.Fprintf(e.Out, "\n%s", nodesOut.Stdout)
 	}
 	return nil
 }

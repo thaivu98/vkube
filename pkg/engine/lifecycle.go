@@ -3,13 +3,15 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/thaivu98/vkube/pkg/api"
 	"github.com/thaivu98/vkube/pkg/ssh"
 )
 
-// Status kiểm tra trạng thái các node và system pods thông qua Primary Control Plane.
+// Status kiểm tra trạng thái các node, toàn bộ pods, StorageClasses, LoadBalancer và Metrics.
 func (e *Engine) Status(ctx context.Context, cfg *api.ClusterConfig) error {
+	start := time.Now()
 	cp1 := cfg.ControlPlanes()[0]
 	client, err := ssh.Dial(ctx, cp1.Name, cp1.Host, cfg.EffectiveSSH(cp1))
 	if err != nil {
@@ -17,20 +19,29 @@ func (e *Engine) Status(ctx context.Context, cfg *api.ClusterConfig) error {
 	}
 	defer client.Close()
 
-	fmt.Fprintf(e.Out, "==> Trạng thái cụm %q (Control Plane: %s @ %s)\n\n", cfg.Metadata.Name, cp1.Name, cp1.Host)
-	nodesRes, err := client.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o wide")
+	if err := e.printClusterStatus(ctx, cfg.Metadata.Name, cp1, client); err != nil {
+		return err
+	}
+	fmt.Fprintf(e.Out, "\nHoàn tất kiểm tra trạng thái sau %s.\n", time.Since(start).Round(time.Millisecond))
+	return nil
+}
+
+// printClusterStatus dùng lại kết nối SSH có sẵn tới Primary Control Plane để in tổng quan cụm.
+func (e *Engine) printClusterStatus(ctx context.Context, clusterName string, cp1 api.NodeConfig, r ssh.Runner) error {
+	fmt.Fprintf(e.Out, "\n==> Trạng thái cụm %q (Control Plane: %s @ %s)\n\n", clusterName, cp1.Name, cp1.Host)
+	nodesRes, err := r.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o wide")
 	if err != nil {
 		return fmt.Errorf("get nodes: %w", err)
 	}
 	fmt.Fprintf(e.Out, "[Nodes]\n%s\n", nodesRes.Stdout)
 
-	podsRes, err := client.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -A -o wide")
+	podsRes, err := r.RunSudo(ctx, "/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -A -o wide")
 	if err != nil {
 		return fmt.Errorf("get pods: %w", err)
 	}
 	fmt.Fprintf(e.Out, "[All Pods]\n%s\n", podsRes.Stdout)
 
-	extraRes, err := client.RunSudo(ctx, `set -e
+	extraRes, err := r.RunSudo(ctx, `set -e
 echo "[StorageClasses]"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get sc 2>/dev/null || true
 echo ""
@@ -38,7 +49,7 @@ echo "[LoadBalancer Services]"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get svc -A --field-selector spec.type=LoadBalancer 2>/dev/null || true
 echo ""
 echo "[Node Metrics (kubectl top nodes)]"
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf top nodes 2>/dev/null || echo "(metrics-server chưa sẵn sàng hoặc chưa bật)"
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf top nodes 2>/dev/null || echo "(metrics-server đang khởi động hoặc chưa bật)"
 `)
 	if err == nil && extraRes.Stdout != "" {
 		fmt.Fprint(e.Out, extraRes.Stdout)
@@ -48,6 +59,7 @@ echo "[Node Metrics (kubectl top nodes)]"
 
 // Reset gỡ bỏ cụm Kubernetes song song trên toàn bộ nodes và dọn sạch cấu hình/CNI/etcd.
 func (e *Engine) Reset(ctx context.Context, cfg *api.ClusterConfig) error {
+	start := time.Now()
 	pool, err := ssh.ConnectAll(ctx, cfg, e.Out)
 	if err != nil {
 		return err
@@ -73,6 +85,6 @@ systemctl restart containerd || true
 	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.Out, "Đã gỡ bỏ hoàn toàn cụm %q.\n", cfg.Metadata.Name)
+	fmt.Fprintf(e.Out, "Đã gỡ bỏ hoàn toàn cụm %q sau %s.\n", cfg.Metadata.Name, time.Since(start).Round(time.Millisecond))
 	return nil
 }
