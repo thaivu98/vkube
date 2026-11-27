@@ -1,4 +1,24 @@
-# vkube
+<div align="center">
+
+```text
+        _          _
+ __   _| | ___   _| |__   ___
+ \ \ / / |/ / | | | '_ \ / _ \
+  \ V /|   <| |_| | |_) |  __/
+   \_/ |_|\_\\__,_|_.__/ \___|
+```
+
+**Fast, Pure-Go Vanilla Kubernetes Installer (`kubeadm`) — Built for On-premise & Air-gapped**
+
+[![Release](https://img.shields.io/github/v/release/thaivu98/vkube?style=flat-square&color=blue)](https://github.com/thaivu98/vkube/releases)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/Deployer-Linux%20%7C%20macOS%20%7C%20Windows-success?style=flat-square)](#)
+[![Arch](https://img.shields.io/badge/Target%20Nodes-amd64%20%7C%20arm64-orange?style=flat-square)](#)
+[![License](https://img.shields.io/badge/License-Apache%202.0-lightgrey?style=flat-square)](LICENSE)
+
+</div>
+
+---
 
 **Trình cài đặt Vanilla Kubernetes nhanh, đóng gói sẵn dựa trên `kubeadm` — tối ưu cho môi trường On-premise và Air-gapped.**
 

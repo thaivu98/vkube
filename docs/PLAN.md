@@ -1,17 +1,16 @@
-# Kế hoạch phát triển `vkube` v0.1
+# Kế hoạch phát triển `vkube` (v0.1 → v1.0)
 
 ## Current Status / Handover
-- **Phiên bản mục tiêu:** `v1.32.2-vkube.1` (MVP v0.1) — **HOÀN TẤT 100%!**
-- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 0 → Phase 5 (MVP v0.1)**
-- **Task đang thực hiện:** Đã hoàn thành toàn bộ 11 Tasks của v0.1
+- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1) — **HOÀN TẤT & ĐÃ PHÁT HÀNH!**
+- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **v0.1 (Phase 0 → Phase 5)** — Sẵn sàng bắt đầu **v0.2 (Phase 6 / Task 12)**
+- **Task đang thực hiện:** Chưa có (chờ chọn task đầu tiên của v0.2)
 - **Vừa hoàn thành:**
-  - Hoàn thành **Phase 5 / Task 11**:
-    - Đóng gói thành công Offline Bundle ARM64 thật (`580.8 MB`, 35 files, 100% Pure Go không cần Docker).
-    - Kiểm thử E2E thành công trên 2 VM Ubuntu ARM64 thật (`master` + `worker`): triển khai trọn bộ Vanilla Kubernetes `v1.32.2` + `containerd 1.7.25` + `Calico v3.29.2` offline chỉ mất **2 phút 4 giây (`2m4s`)** từ OS trắng đến khi toàn bộ node `Ready`!
-    - Phát hiện và vá ngay 2 lỗi thực tế quan trọng trong quá trình test thật: ngưỡng RAM `MemTotal` trên VM 2GB ARM64 (`1624 MB`) và chuyển staging bundle từ `/tmp` (`tmpfs`) sang `/var/tmp` & `/var/lib/vkube/staging` trên ổ đĩa thật.
-    - Bổ sung hướng dẫn lab tại `lab/README.md`.
-    - Bổ sung **Modular Core Addons** bật/tắt linh hoạt (`metricsServer`, `localPathStorage`, `metalLB`, **`kongIngress`** DB-less + `customManifests`) và hỗ trợ **Private Registry / Harbor mirror** (`spec.registry.mirrors` -> `/etc/containerd/certs.d/`) quản lý 100% trong BOM `versions.yaml`.
-- **Bước tiếp theo (Next Action):** Đã rà soát bảo mật, dọn rác, pass 100% `gofmt`/`go vet`/`go test` và phát hành tag **`v1.32.2-vkube.1`**. Sẵn sàng bắt đầu **v0.2** (Cilium CNI, `vkube add-node`, `vkube backup`/`restore` cho `etcd`).
+  - Phát hành chính thức tag **`v1.32.2-vkube.1`** kèm GitHub Actions tự động build 6 binary đa nền tảng + `SHA256SUMS` và script cài 1 dòng `scripts/install.sh` (tự verify SHA256).
+  - Kiểm thử E2E thành công trên cụm 3 VM Ubuntu ARM64 thật (`master` + `worker-1` + `worker-2`):
+    - **Offline Bundle (3 nodes + đủ 4 Core Addons):** **2 phút 29 giây (`2m29s`)**.
+    - **Online trực tiếp (3 nodes + đủ 4 Core Addons + verify SHA256 + SSH TOFU):** **2 phút 43 giây (`2m43s`)**.
+  - Hoàn thiện đợt **Hardening bảo mật & độ tin cậy** từ cross-review (SSH TOFU `known_hosts` + `ssh-agent` + passphrase, Online SHA256 verify trên node, bỏ `/tmp` dùng `~/.vkube-tmp` `0600`, `vkube reset` chỉ xóa chain `KUBE-*/cali-*`, DNS-1123 validation, `VKUBE_SSH_PASSWORD` env, `--node-ip` cho multi-NIC, timing từng giai đoạn và tự in `status` sau `apply`).
+- **Bước tiếp theo (Next Action):** Chọn bắt đầu **v0.2** từ các task trong Phase 6 bên dưới (gợi ý ưu tiên: **Task 12** nâng BOM K8s mới nhất + Kong 3.x, hoặc **Task 13/14** `vkube add-node` & `vkube backup`/`restore` `etcd`).
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
   - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
@@ -63,3 +62,27 @@
 
 ## Phase 5: Kiểm thử trên Lab VM & Phát hành v0.1
 - [x] **Task 11:** Bổ sung hướng dẫn & script trong `lab/` (VMware Fusion ARM64 + Multipass/Lima mô phỏng Air-gapped), chạy kiểm thử E2E cho cả cụm Single-node và 3-node HA, đo thời gian triển khai thực tế và gắn tag `v1.32.2-vkube.1`.
+
+---
+
+## Phase 6 (v0.2): Vận hành Day-2, Nâng cấp BOM & Mở rộng Hạ tầng
+- [ ] **Task 12 — Nâng cấp BOM & Addons mới nhất:** Kiểm tra support matrix mới nhất trên `kubernetes.io`, nâng BOM `versions.yaml` lên nhánh Kubernetes còn được hỗ trợ dài hạn (ví dụ `v1.33.x` / `v1.34.x`), cập nhật `containerd`, `Calico` và nâng **Kong Ingress Controller** lên dòng **v3.x**.
+- [ ] **Task 13 — Scale cụm (`vkube add-node` & `vkube remove-node`):** Hỗ trợ thêm mới Worker/Control Plane vào cụm đang chạy và drain + gỡ node an toàn (kèm dọn `etcd` member nếu gỡ CP).
+- [ ] **Task 14 — Backup & Restore `etcd` (`vkube backup` & `vkube restore`):** Tự động snapshot `etcd` (verify bằng `etcdctl snapshot status`) kèm sao lưu `/etc/kubernetes/pki/` về máy Deployer, và hỗ trợ khôi phục cụm 1-node / 3-node HA không bị split-brain.
+- [ ] **Task 15 — Bổ sung CNI Cilium (eBPF):** Hỗ trợ chọn `spec.networking.cni: cilium` song song với `calico` (kèm tùy chọn chạy không cần `kube-proxy` và đóng gói offline trong bundle).
+- [ ] **Task 16 — LAN HTTP Fan-out & Hỗ trợ Rocky/AlmaLinux/RHEL:** Nối `BundleServer` (`pkg/ssh/http_dist.go`, cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes) để phân phối bundle tốc độ cao trong LAN; mở rộng `preflight`/`os-prep` hỗ trợ thêm **Rocky Linux / AlmaLinux / RHEL 8–9** bên cạnh Ubuntu.
+
+---
+
+## Phase 7 (v0.3): Golden Image (Packer) — Dựng cụm trong ~1–1.5 phút
+- [ ] **Task 17 — Packer Templates (VMware & QEMU/Proxmox):** Tạo bộ template Packer bake sẵn OS tuning + binaries + OCI images kèm file đánh dấu `/etc/vkube-golden-image`; nâng cấp `pkg/engine` tự nhận diện `NodeFacts.HasGoldenImage` để bỏ qua bước tải/nạp artifact.
+
+---
+
+## Phase 8 (v0.5): Rolling Upgrade & DevSecOps Hardening
+- [ ] **Task 18 — `vkube upgrade` & Hardening:** Implement rolling upgrade an toàn từng node qua `kubeadm upgrade`, bổ sung kiểm tra đồng bộ giờ (`chrony`/`systemd-timesyncd`) trong `preflight`, tùy chọn `metrics-server` dùng `serverTLSBootstrap` (thay `--kubelet-insecure-tls`) và bộ cấu hình CIS Benchmark cơ bản.
+
+---
+
+## Phase 9 (v1.0): Production-ready & Supply Chain Security
+- [ ] **Task 19 — Ký Artifact (Cosign) & SBOM:** Tích hợp ký binary & Offline Bundle bằng Cosign, tự động sinh SBOM (Syft/SPDX) trong GitHub Actions release, hoàn thiện tài liệu vận hành Production.

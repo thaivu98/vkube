@@ -7,6 +7,17 @@
 
 set -eu
 
+printf '\033[1;36m'
+cat <<'BANNER'
+        _          _
+ __   _| | ___   _| |__   ___
+ \ \ / / |/ / | | | '_ \ / _ \
+  \ V /|   <| |_| | |_) |  __/
+   \_/ |_|\_\\__,_|_.__/ \___|
+BANNER
+printf '\033[0m'
+printf '  Fast Vanilla Kubernetes Installer (On-premise & Air-gapped)\n\n'
+
 REPO="thaivu98/vkube"
 DEFAULT_VERSION="v1.32.2-vkube.1"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"

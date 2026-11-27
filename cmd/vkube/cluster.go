@@ -34,6 +34,10 @@ func newApplyCmd() *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
+			if !dryRun {
+				fmt.Fprint(out, cliBanner)
+				fmt.Fprintf(out, "  vkube %s — Fast Vanilla Kubernetes Installer\n\n", version)
+			}
 			modeLabel := "Online (trực tiếp)"
 			if bundleFile != "" {
 				modeLabel = "Air-gapped (--bundle)"
