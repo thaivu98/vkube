@@ -30,9 +30,19 @@ MEM_KB="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 HAS_ZSTD="0"
 if command -v zstd >/dev/null 2>&1; then HAS_ZSTD="1"; fi
 GOLDEN="0"
-if [ -f /etc/vkube-golden-image ]; then GOLDEN="1"; fi
-printf "OS_ID=%s\nOS_VER=%s\nARCH=%s\nKERNEL=%s\nHOSTNAME=%s\nIFACE=%s\nCPUS=%s\nMEM_MB=%s\nHAS_ZSTD=%s\nGOLDEN=%s\n" \
-  "$OS_ID" "$OS_VER" "$ARCH" "$KERNEL" "$HNAME" "$IFACE" "$CPUS" "$((MEM_KB / 1024))" "$HAS_ZSTD" "$GOLDEN"
+GOLDEN_TAG=""
+if [ -f /etc/vkube-golden-image ]; then
+  GOLDEN="1"
+  GOLDEN_TAG="$(awk -F= '/^RELEASE_TAG=/ {print $2; exit}' /etc/vkube-golden-image 2>/dev/null || true)"
+fi
+NTP_SYNC="0"
+if command -v timedatectl >/dev/null 2>&1 && [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo no)" = "yes" ]; then
+  NTP_SYNC="1"
+elif command -v chronyc >/dev/null 2>&1 && chronyc tracking >/dev/null 2>&1; then
+  NTP_SYNC="1"
+fi
+printf "OS_ID=%s\nOS_VER=%s\nARCH=%s\nKERNEL=%s\nHOSTNAME=%s\nIFACE=%s\nCPUS=%s\nMEM_MB=%s\nHAS_ZSTD=%s\nGOLDEN=%s\nGOLDEN_TAG=%s\nNTP_SYNC=%s\n" \
+  "$OS_ID" "$OS_VER" "$ARCH" "$KERNEL" "$HNAME" "$IFACE" "$CPUS" "$((MEM_KB / 1024))" "$HAS_ZSTD" "$GOLDEN" "$GOLDEN_TAG" "$NTP_SYNC"
 `
 
 // RunPreflight thu thập NodeFacts đúng 1 lần song song trên toàn bộ nodes, lưu vào state.Facts
@@ -61,8 +71,15 @@ func (e *Engine) runPreflightNodes(ctx context.Context, state *ClusterState, nod
 
 		mu.Lock()
 		state.Facts[node.Name] = facts
-		fmt.Fprintf(e.Out, "  [preflight] %-12s %s %s | arch=%s | nic=%s | %d vCPU / %d MB RAM | zstd=%t\n",
-			node.Name, facts.OSID, facts.OSVersion, facts.Arch, facts.DefaultInterface, facts.CPUCores, facts.MemoryMB, facts.HasZstd)
+		extra := ""
+		if facts.HasGoldenImage {
+			extra += " | golden=true"
+		}
+		if !facts.NTPSynced {
+			extra += " | [WARN: NTP chưa đồng bộ]"
+		}
+		fmt.Fprintf(e.Out, "  [preflight] %-12s %s %s | arch=%s | nic=%s | %d vCPU / %d MB RAM | zstd=%t%s\n",
+			node.Name, facts.OSID, facts.OSVersion, facts.Arch, facts.DefaultInterface, facts.CPUCores, facts.MemoryMB, facts.HasZstd, extra)
 		mu.Unlock()
 		return nil
 	})
@@ -195,6 +212,8 @@ func parseNodeFacts(nodeName, host, output string) (*api.NodeFacts, error) {
 		MemoryMB:         memMB,
 		HasZstd:          kv["HAS_ZSTD"] == "1",
 		HasGoldenImage:   kv["GOLDEN"] == "1",
+		GoldenImageTag:   kv["GOLDEN_TAG"],
+		NTPSynced:        kv["NTP_SYNC"] == "1",
 	}, nil
 }
 

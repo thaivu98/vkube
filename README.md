@@ -200,9 +200,12 @@ vkube certs renew -f cluster.yaml --yes
 
 # Bật thêm Core Addons / customManifests / Labels / Taints / Proxy / Registry Mirrors trên cụm đang sống:
 vkube addons apply -f cluster.yaml
+
+# Rolling upgrade cụm Kubernetes không downtime tuần tự từng node (hỗ trợ cả --bundle Air-gapped):
+vkube upgrade -f cluster.yaml --target-version v1.36.8 --yes
 ```
 
-> **Enterprise Networking & Security trong `cluster.yaml`:** Hỗ trợ **SSH Bastion / Jump Host** (`spec.ssh.bastion`, 100% Pure Go), **Corporate HTTP/HTTPS Proxy** (`spec.proxy`), **Encryption at Rest cho Secrets trong `etcd`** (`spec.controlPlane.encryptSecrets: true`), **tùy biến `extraArgs`** (OIDC/Audit Log) và **chế độ BGP** (`spec.vipBGP`, `spec.addons.metalLB.bgp`).
+> **Enterprise Networking, Golden Image & CIS Hardening:** Hỗ trợ **SSH Bastion / Jump Host** (`spec.ssh.bastion`), **Corporate HTTP/HTTPS Proxy** (`spec.proxy`), **CIS Benchmark Hardening** (`spec.controlPlane.cisHardening: true` tự bật `encryptSecrets`, audit log, tắt profiling), **`metricsServer.secureTLS: true`** (`serverTLSBootstrap`), **chế độ BGP** (`spec.vipBGP`, `spec.addons.metalLB.bgp`), và bộ **Packer Golden Image** tại [packer/README.md](packer/README.md) để dựng cụm trong ~1–1.5 phút.
 
 ---
 
@@ -229,6 +232,7 @@ vkube bundle build --arch amd64 --manifest my-versions.yaml
 | `vkube status -f <cluster.yaml>`                                         | Xem trạng thái Nodes, Pods, Storage, LB, Metrics & Hạn chứng chỉ       |
 | `vkube addons apply -f <cluster.yaml>`                                   | Cập nhật Core Addons, Labels/Taints, Proxy & Registry trên cụm đang chạy |
 | `vkube certs check\|renew -f <cluster.yaml>`                             | Kiểm tra hạn & gia hạn chứng chỉ K8s trên toàn bộ Control Plane        |
+| `vkube upgrade -f <cluster.yaml> [--target-version vX.Y.Z] --yes`        | Rolling upgrade cụm K8s không downtime tuần tự từng node               |
 | `vkube add-node -f <cluster.yaml> [--node <name>] [--bundle <file>]`     | Thêm Worker / Control Plane mới vào cụm đang chạy                      |
 | `vkube remove-node -f <cluster.yaml> --node <name> --yes`                | Drain, gỡ `etcd` member (nếu CP), xóa node và reset máy an toàn        |
 | `vkube backup -f <cluster.yaml> [--target local\|s3\|sftp] [--retention]`| Snapshot `etcd` (có verify) + PKI và đẩy về Local / S3-MinIO / SFTP    |

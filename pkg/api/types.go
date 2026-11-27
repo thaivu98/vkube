@@ -125,11 +125,17 @@ type RegistryMirror struct {
 
 // AddonsConfig quản lý các Core Addons bật/tắt linh hoạt và các manifest tùy chỉnh.
 type AddonsConfig struct {
-	MetricsServer    ToggleAddon  `yaml:"metricsServer,omitempty" json:"metricsServer,omitempty"`
-	LocalPathStorage ToggleAddon  `yaml:"localPathStorage,omitempty" json:"localPathStorage,omitempty"`
-	MetalLB          MetalLBAddon `yaml:"metalLB,omitempty" json:"metalLB,omitempty"`
-	KongIngress      ToggleAddon  `yaml:"kongIngress,omitempty" json:"kongIngress,omitempty"`
-	CustomManifests  []string     `yaml:"customManifests,omitempty" json:"customManifests,omitempty"`
+	MetricsServer    MetricsServerAddon `yaml:"metricsServer,omitempty" json:"metricsServer,omitempty"`
+	LocalPathStorage ToggleAddon        `yaml:"localPathStorage,omitempty" json:"localPathStorage,omitempty"`
+	MetalLB          MetalLBAddon       `yaml:"metalLB,omitempty" json:"metalLB,omitempty"`
+	KongIngress      ToggleAddon        `yaml:"kongIngress,omitempty" json:"kongIngress,omitempty"`
+	CustomManifests  []string           `yaml:"customManifests,omitempty" json:"customManifests,omitempty"`
+}
+
+// MetricsServerAddon cấu hình Metrics Server (bật SecureTLS để dùng kubelet serverTLSBootstrap thay vì --kubelet-insecure-tls).
+type MetricsServerAddon struct {
+	Enabled   bool `yaml:"enabled" json:"enabled"`
+	SecureTLS bool `yaml:"secureTLS,omitempty" json:"secureTLS,omitempty"`
 }
 
 // ToggleAddon đại diện cho một addon bật/tắt đơn giản.
@@ -159,13 +165,14 @@ type ProxyConfig struct {
 	NoProxy    string `yaml:"noProxy,omitempty" json:"noProxy,omitempty"`
 }
 
-// ControlPlaneExtraConfig cho phép tùy biến cờ nâng cao (OIDC, Audit Log, Encryption at Rest) cho các thành phần cụm.
+// ControlPlaneExtraConfig cho phép tùy biến cờ nâng cao (OIDC, Audit Log, Encryption at Rest, CIS Hardening) cho các thành phần cụm.
 type ControlPlaneExtraConfig struct {
 	APIServerExtraArgs         map[string]string `yaml:"apiServerExtraArgs,omitempty" json:"apiServerExtraArgs,omitempty"`
 	ControllerManagerExtraArgs map[string]string `yaml:"controllerManagerExtraArgs,omitempty" json:"controllerManagerExtraArgs,omitempty"`
 	SchedulerExtraArgs         map[string]string `yaml:"schedulerExtraArgs,omitempty" json:"schedulerExtraArgs,omitempty"`
 	KubeletExtraArgs           map[string]string `yaml:"kubeletExtraArgs,omitempty" json:"kubeletExtraArgs,omitempty"`
 	EncryptSecrets             bool              `yaml:"encryptSecrets,omitempty" json:"encryptSecrets,omitempty"`
+	CISHardening               bool              `yaml:"cisHardening,omitempty" json:"cisHardening,omitempty"`
 }
 
 // BackupConfig cấu hình đích lưu trữ cho lệnh `vkube backup` và `vkube restore` (local, s3/MinIO, hoặc sftp/NAS).
@@ -293,5 +300,7 @@ type NodeFacts struct {
 	CPUCores         int    `json:"cpuCores"`
 	MemoryMB         int    `json:"memoryMB"`
 	HasZstd          bool   `json:"hasZstd"`        // kiểm tra có sẵn zstd trên node hay không
-	HasGoldenImage   bool   `json:"hasGoldenImage"` // sẵn sàng cho v0.3 (Packer Golden Image)
+	HasGoldenImage   bool   `json:"hasGoldenImage"` // nhận diện Golden Image (Packer) để bỏ qua tải/nạp artifact
+	GoldenImageTag   string `json:"goldenImageTag"` // releaseTag đã bake vào /etc/vkube-golden-image (nếu có)
+	NTPSynced        bool   `json:"ntpSynced"`      // kiểm tra đồng bộ thời gian NTP/chrony/systemd-timesyncd
 }

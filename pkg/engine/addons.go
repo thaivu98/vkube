@@ -163,17 +163,23 @@ func (e *Engine) runAddons(ctx context.Context, state *ClusterState) error {
 
 	fmt.Fprintf(e.Out, "==> [Addons] Triển khai các Addons đã bật trong cluster.yaml...\n")
 
-	// 1. Metrics Server (HPA & kubectl top) — tự thêm --kubelet-insecure-tls cho kubeadm on-prem
+	// 1. Metrics Server (HPA & kubectl top) — nếu bật secureTLS thì dùng kubelet serverTLSBootstrap (không dùng --kubelet-insecure-tls)
 	if addons.MetricsServer.Enabled {
-		fmt.Fprintf(e.Out, "  [addon]     metrics-server (HPA / kubectl top)...\n")
+		tlsPatch := `if ! grep -q -- '--kubelet-insecure-tls' "$F"; then
+  sed -i '/--kubelet-preferred-address-types=/a\        - --kubelet-insecure-tls' "$F"
+fi`
+		if addons.MetricsServer.SecureTLS {
+			fmt.Fprintf(e.Out, "  [addon]     metrics-server (HPA / kubectl top — verified kubelet TLS via serverTLSBootstrap)...\n")
+			tlsPatch = `sed -i '/--kubelet-insecure-tls/d' "$F"`
+		} else {
+			fmt.Fprintf(e.Out, "  [addon]     metrics-server (HPA / kubectl top)...\n")
+		}
 		script := fmt.Sprintf(`set -euo pipefail
 F="%s/metrics-server.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
-if ! grep -q -- '--kubelet-insecure-tls' "$F"; then
-  sed -i '/--kubelet-preferred-address-types=/a\        - --kubelet-insecure-tls' "$F"
-fi
+%s
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$F"
-`, remoteManifestDir)
+`, remoteManifestDir, tlsPatch)
 		if _, err := cp1Runner.RunSudo(ctx, script); err != nil {
 			return fmt.Errorf("install metrics-server addon: %w", err)
 		}

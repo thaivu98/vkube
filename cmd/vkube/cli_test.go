@@ -80,7 +80,7 @@ func TestDay2SubcommandsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root --help failed: %v", err)
 	}
-	for _, cmdName := range []string{"add-node", "remove-node", "backup", "restore", "certs", "addons"} {
+	for _, cmdName := range []string{"add-node", "remove-node", "backup", "restore", "certs", "addons", "upgrade"} {
 		if !strings.Contains(out, cmdName) {
 			t.Errorf("expected subcommand %q in root help output:\n%s", cmdName, out)
 		}

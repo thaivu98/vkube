@@ -434,3 +434,34 @@ spec:
 		t.Fatalf("expected invalid proxy URL error, got: %v", err)
 	}
 }
+
+func TestParseClusterConfig_CISHardeningDefaults(t *testing.T) {
+	yamlCfg := `
+metadata:
+  name: prod-cis
+spec:
+  arch: arm64
+  controlPlane:
+    cisHardening: true
+  addons:
+    metricsServer:
+      enabled: true
+      secureTLS: true
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`
+	cfg, err := ParseClusterConfig([]byte(yamlCfg))
+	if err != nil {
+		t.Fatalf("expected valid CIS config, got: %v", err)
+	}
+	if !cfg.Spec.ControlPlane.EncryptSecrets {
+		t.Error("expected cisHardening to auto-enable encryptSecrets")
+	}
+	if cfg.Spec.ControlPlane.APIServerExtraArgs["profiling"] != "false" {
+		t.Errorf("expected profiling=false under cisHardening, got: %+v", cfg.Spec.ControlPlane.APIServerExtraArgs)
+	}
+	if !cfg.Spec.Addons.MetricsServer.SecureTLS {
+		t.Error("expected metricsServer.secureTLS=true")
+	}
+}

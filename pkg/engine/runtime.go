@@ -30,6 +30,49 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 	return e.runRuntimeNodes(ctx, state, state.Config.Spec.Nodes)
 }
 
+func isGoldenImageMatched(facts *api.NodeFacts, expectedTag string) bool {
+	if facts == nil || !facts.HasGoldenImage {
+		return false
+	}
+	if facts.GoldenImageTag == "" || expectedTag == "" {
+		return true
+	}
+	return facts.GoldenImageTag == expectedTag
+}
+
+func (e *Engine) applyGoldenImageNode(ctx context.Context, state *ClusterState, node api.NodeConfig, r ssh.Runner) error {
+	sshUser := state.Config.EffectiveSSH(node).User
+	cmd := fmt.Sprintf(`set -euo pipefail
+mkdir -p /etc/systemd/system/kubelet.service.d
+%s
+systemctl daemon-reload
+systemctl enable --now containerd
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs))
+	if _, err := r.RunSudo(ctx, cmd); err != nil {
+		return fmt.Errorf("golden-image fast-path setup: %w", err)
+	}
+	needRestart := false
+	if len(state.Config.Spec.Registry.Mirrors) > 0 {
+		if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r, sshUser); err != nil {
+			return err
+		}
+		needRestart = true
+	}
+	if hasProxyConfig(state.Config.Spec.Proxy) {
+		if err := configureContainerdProxy(ctx, state.Config, r, sshUser); err != nil {
+			return err
+		}
+		needRestart = true
+	}
+	if needRestart {
+		if _, err := r.RunSudo(ctx, "systemctl daemon-reload && systemctl restart containerd"); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(e.Out, "  [golden]    %-12s bỏ qua tải/nạp artifact (Golden Image đã bake sẵn) — OK\n", node.Name)
+	return nil
+}
+
 func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targetNodes []api.NodeConfig) error {
 	if state.OnlineMode {
 		return e.runRuntimeOnlineNodes(ctx, state, targetNodes)
@@ -94,6 +137,9 @@ func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targe
 
 	return state.Pool.RunParallel(ctx, targetNodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		facts := state.Facts[node.Name]
+		if isGoldenImageMatched(facts, state.BundleManifest.ReleaseTag) {
+			return e.applyGoldenImageNode(ctx, state, node, r)
+		}
 		useZstd := facts != nil && facts.HasZstd
 
 		localUpload := state.BundlePath
@@ -348,6 +394,9 @@ func (e *Engine) runRuntimeOnlineNodes(ctx context.Context, state *ClusterState,
 	sandboxImage := fmt.Sprintf("registry.k8s.io/pause:%s", pauseVersion)
 
 	return state.Pool.RunParallel(ctx, targetNodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+		if isGoldenImageMatched(state.Facts[node.Name], state.BundleManifest.ReleaseTag) {
+			return e.applyGoldenImageNode(ctx, state, node, r)
+		}
 		if err := r.WriteFile(ctx, templates.ContainerdService(), ".vkube-tmp/containerd.service", 0o600); err != nil {
 			return err
 		}

@@ -70,3 +70,10 @@ scheduler:
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 cgroupDriver: systemd
+{{- if .ServerTLSBootstrap }}
+serverTLSBootstrap: true
+{{- end }}
+{{- if .CISHardening }}
+readOnlyPort: 0
+streamingConnectionIdleTimeout: "5m0s"
+{{- end }}

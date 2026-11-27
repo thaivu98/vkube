@@ -52,6 +52,8 @@ type KubeadmInitData struct {
 	ControllerManagerExtraArgs []KubeadmArg
 	SchedulerExtraArgs         []KubeadmArg
 	EncryptSecrets             bool
+	ServerTLSBootstrap         bool
+	CISHardening               bool
 }
 
 // KubeadmJoinData chứa tham số render file kubeadm-join.yaml (v1beta4) để tránh lộ token/certificateKey trên command line (ps).

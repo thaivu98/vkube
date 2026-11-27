@@ -107,6 +107,41 @@ func (c *ClusterConfig) ApplyDefaults() {
 		c.Spec.ControlPlaneEndpoint = net.JoinHostPort(c.Spec.VIP, "6443")
 	}
 
+	if c.Spec.ControlPlane.CISHardening {
+		c.Spec.ControlPlane.EncryptSecrets = true
+		if c.Spec.ControlPlane.APIServerExtraArgs == nil {
+			c.Spec.ControlPlane.APIServerExtraArgs = make(map[string]string)
+		}
+		for k, v := range map[string]string{
+			"profiling":           "false",
+			"audit-log-maxage":    "30",
+			"audit-log-maxbackup": "10",
+			"audit-log-maxsize":   "100",
+			"audit-log-path":      "/var/log/kubernetes/audit/audit.log",
+		} {
+			if _, exists := c.Spec.ControlPlane.APIServerExtraArgs[k]; !exists {
+				c.Spec.ControlPlane.APIServerExtraArgs[k] = v
+			}
+		}
+		if c.Spec.ControlPlane.ControllerManagerExtraArgs == nil {
+			c.Spec.ControlPlane.ControllerManagerExtraArgs = make(map[string]string)
+		}
+		for k, v := range map[string]string{
+			"profiling":                   "false",
+			"terminated-pod-gc-threshold": "100",
+		} {
+			if _, exists := c.Spec.ControlPlane.ControllerManagerExtraArgs[k]; !exists {
+				c.Spec.ControlPlane.ControllerManagerExtraArgs[k] = v
+			}
+		}
+		if c.Spec.ControlPlane.SchedulerExtraArgs == nil {
+			c.Spec.ControlPlane.SchedulerExtraArgs = make(map[string]string)
+		}
+		if _, exists := c.Spec.ControlPlane.SchedulerExtraArgs["profiling"]; !exists {
+			c.Spec.ControlPlane.SchedulerExtraArgs["profiling"] = "false"
+		}
+	}
+
 	// Giá trị mặc định & đọc secret từ biến môi trường cho cấu hình Backup (local / s3 / sftp)
 	if c.Spec.Backup.Target == "" {
 		c.Spec.Backup.Target = BackupTargetLocal

@@ -214,6 +214,8 @@ rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
 		ControllerManagerExtraArgs: templates.SortedArgs(state.Config.Spec.ControlPlane.ControllerManagerExtraArgs),
 		SchedulerExtraArgs:         templates.SortedArgs(state.Config.Spec.ControlPlane.SchedulerExtraArgs),
 		EncryptSecrets:             state.Config.Spec.ControlPlane.EncryptSecrets,
+		ServerTLSBootstrap:         state.Config.Spec.Addons.MetricsServer.SecureTLS,
+		CISHardening:               state.Config.Spec.ControlPlane.CISHardening,
 	})
 	if err != nil {
 		return fmt.Errorf("render kubeadm-init.yaml: %w", err)
@@ -221,6 +223,14 @@ rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
 
 	if err := cp1Runner.WriteFile(ctx, initYAML, ".vkube-tmp/kubeadm-init.yaml", 0o600); err != nil {
 		return err
+	}
+
+	// Nếu bật CISHardening, tạo sẵn thư mục audit log & siết quyền file cấu hình Control Plane chuẩn CIS
+	if state.Config.Spec.ControlPlane.CISHardening {
+		_ = state.Pool.RunParallel(ctx, cps, func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
+			_, err := r.RunSudo(ctx, "mkdir -p -m 0700 /var/log/kubernetes/audit")
+			return err
+		})
 	}
 
 	cp1User := state.Config.EffectiveSSH(cp1).User
@@ -546,6 +556,24 @@ fi`, cp1User, cp1User, cp1User)
 		return fmt.Errorf("write local kubeconfig %q: %w", kubeconfigOut, err)
 	}
 	fmt.Fprintf(e.Out, "  [kubeconfig] Đã lưu kubeconfig tại: %s (context: %s)\n", kubeconfigOut, state.Config.Metadata.Name)
+
+	// Nếu bật serverTLSBootstrap (metricsServer.secureTLS), tự động duyệt các CSR kubelet-serving đang chờ
+	if state.Config.Spec.Addons.MetricsServer.SecureTLS {
+		approveCSR := `set -euo pipefail
+for csr in $(/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get csr -o jsonpath='{range .items[?(@.spec.signerName=="kubernetes.io/kubelet-serving")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+  [ -n "$csr" ] && /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf certificate approve "$csr" >/dev/null 2>&1 || true
+done`
+		_, _ = cp1Runner.RunSudo(ctx, approveCSR)
+	}
+
+	// Siết quyền file manifest & PKI theo CIS Benchmark khi bật cisHardening
+	if state.Config.Spec.ControlPlane.CISHardening {
+		_ = state.Pool.RunParallel(ctx, state.Config.ControlPlanes(), func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
+			_, err := r.RunSudo(ctx, `chmod 0600 /etc/kubernetes/manifests/*.yaml /etc/kubernetes/*.conf 2>/dev/null || true
+chmod 0700 /var/lib/etcd 2>/dev/null || true`)
+			return err
+		})
+	}
 
 	// Chờ toàn bộ nodes đạt trạng thái Ready (tối đa 3 phút)
 	fmt.Fprintf(e.Out, "  [verify]    Đang chờ toàn bộ %d node(s) đạt trạng thái Ready...\n", len(state.Config.Spec.Nodes))

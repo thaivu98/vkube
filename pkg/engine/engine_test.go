@@ -473,3 +473,33 @@ func TestPhase7Helpers_ProxyRetentionAndBGP(t *testing.T) {
 		}
 	}
 }
+
+func TestPhase8And9Helpers_GoldenImageAndUpgradePath(t *testing.T) {
+	// 1. Golden Image tag matching
+	if !isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: "v1.36.7-vkube.1"}, "v1.36.7-vkube.1") {
+		t.Error("expected exact golden image tag match")
+	}
+	if !isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: ""}, "v1.36.7-vkube.1") {
+		t.Error("expected untagged golden image match")
+	}
+	if isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: "v1.32.2-vkube.1"}, "v1.36.7-vkube.1") {
+		t.Error("expected mismatched golden image tag to return false")
+	}
+
+	// 2. validateUpgradePath
+	for _, tc := range []struct {
+		cur, target string
+		wantErr     bool
+	}{
+		{"v1.35.11", "v1.36.7", false},
+		{"v1.36.7", "v1.36.8", false},
+		{"v1.36.7", "v1.36.7", true},  // same version
+		{"v1.36.7", "v1.35.11", true}, // downgrade
+		{"v1.34.5", "v1.36.7", true},  // skip 2 minors
+	} {
+		err := validateUpgradePath(tc.cur, tc.target)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("validateUpgradePath(%s -> %s): err=%v, wantErr=%v", tc.cur, tc.target, err, tc.wantErr)
+		}
+	}
+}
