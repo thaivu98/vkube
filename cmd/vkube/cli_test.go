@@ -74,3 +74,15 @@ func TestInitConfigAndApplyDryRun(t *testing.T) {
 		t.Fatalf("unexpected apply --dry-run output:\n%s", out)
 	}
 }
+
+func TestDay2SubcommandsRegistered(t *testing.T) {
+	out, err := executeCmd("--help")
+	if err != nil {
+		t.Fatalf("root --help failed: %v", err)
+	}
+	for _, cmdName := range []string{"add-node", "remove-node", "backup", "restore"} {
+		if !strings.Contains(out, cmdName) {
+			t.Errorf("expected subcommand %q in root help output:\n%s", cmdName, out)
+		}
+	}
+}

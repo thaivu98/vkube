@@ -1,10 +1,14 @@
 # Kế hoạch phát triển `vkube` (v0.1 → v1.0)
 
 ## Current Status / Handover
-- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1`
-- **Giai đoạn hiện tại:** **Phase 6 (v0.2)** — Vận hành Day-2, Nâng cấp BOM & Mở rộng Hạ tầng
-- **Task đang thực hiện:** Đã xong **Task 12**, sẵn sàng sang **Task 13** (`vkube add-node` & `vkube remove-node`)
+- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v0.2)
+- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 6 (v0.2 — Tasks 12 → 16)** — Sẵn sàng sang **Phase 7 (v0.3 / Task 17 — Golden Image Packer)** hoặc kiểm thử E2E v0.2
+- **Task đang thực hiện:** Đã hoàn thành toàn bộ Phase 6 (v0.2)
 - **Vừa hoàn thành:**
+  - **Task 16 (LAN HTTP Fan-out & Rocky/AlmaLinux/RHEL 8–9):** Nối `ssh.BundleServer` vào `pkg/engine/runtime.go` (cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes, tự fallback SFTP nếu bị firewall chặn); mở rộng `preflight` & `os-prep` hỗ trợ **Rocky Linux / AlmaLinux / RHEL 8–9** (SELinux permissive + mở đúng port K8s/CNI trên `firewalld` nếu đang chạy).
+  - **Task 15 (Cilium eBPF CNI):** Bổ sung hỗ trợ `spec.networking.cni: cilium` và `spec.networking.kubeProxyReplacement: true` (`--skip-phases=addon/kube-proxy`), nhúng manifest `cilium/cilium v1.20.5` vào `pkg/templates/files/cilium.yaml` bơm động version/PodSubnet/API endpoint, đóng gói sẵn image Cilium trong Offline Bundle và bổ sung dọn dẹp Cilium/BPF trong `vkube reset`.
+  - **Task 14 (`vkube backup` & `vkube restore` `etcd`):** Chụp snapshot `etcd` kèm verify (`etcdutl`/`etcdctl snapshot status`), đóng gói cùng `/etc/kubernetes/pki/` & `admin.conf`, tải về bằng Pure Go SFTP (`DownloadFile`); hỗ trợ khôi phục cụm 1-node và 3-node HA chống split-brain bằng image `etcd` cục bộ trong `containerd` (100% Air-gapped).
+  - **Task 13 (`vkube add-node` & `vkube remove-node`):** Mở rộng cụm đang chạy (tự nhận diện node mới hoặc chỉ định `--node`, join CP tuần tự qua `upload-certs` + `kube-vip` và Worker song song); gỡ node an toàn (`drain` → gỡ `etcd` member nếu là CP → `delete node` → reset node, bảo vệ không cho gỡ CP cuối cùng).
   - **Task 12 (BOM v1.36.7 + Containerd v2 + Kong v3.x):**
     - Nâng BOM mặc định (`pkg/versions/versions.yaml`) lên nhánh Kubernetes đang được hỗ trợ chính thức **`v1.36.7`** (`etcd 3.6.8-0`, `coredns v1.14.2`, `pause 3.10.2`), **`containerd 2.4.2`**, `runc v1.5.3`, `cni-plugins v1.10.0`, `crictl v1.36.0`, **`Calico v3.33.1`** (chuyển sang `quay.io/calico/{calico,node,third-party-cni-plugins}`), **`kube-vip v1.3.2`**, `metrics-server v0.9.1`, `local-path v0.0.37`, `metallb v0.16.2` — toàn bộ manifest đều ghim SHA256 64-hex.
     - Nâng cấp **Kong Ingress Controller** lên dòng **v3.x** (`kong_controller: 3.5` / `kong_gateway: 3.9`), nhúng manifest DB-less render từ Helm chart chính thức `kong/kong v3.4.1` vào `pkg/templates/files/kong-dbless.yaml` kèm tự tạo `Namespace`/`IngressClass` và bơm version động từ BOM (không phụ thuộc URL cũ đã deprecated).
@@ -72,10 +76,10 @@
 
 ## Phase 6 (v0.2): Vận hành Day-2, Nâng cấp BOM & Mở rộng Hạ tầng
 - [x] **Task 12 — Nâng cấp BOM & Addons mới nhất:** Kiểm tra support matrix mới nhất trên `kubernetes.io`, nâng BOM `versions.yaml` lên nhánh Kubernetes đang được hỗ trợ chính thức (`v1.35.x+`), cập nhật `containerd`, `Calico`, `kube-vip` tương thích và nâng **Kong Ingress Controller** lên dòng **v3.x**.
-- [ ] **Task 13 — Scale cụm (`vkube add-node` & `vkube remove-node`):** Hỗ trợ thêm mới Worker/Control Plane vào cụm đang chạy và drain + gỡ node an toàn (kèm dọn `etcd` member nếu gỡ CP).
-- [ ] **Task 14 — Backup & Restore `etcd` (`vkube backup` & `vkube restore`):** Tự động snapshot `etcd` (verify bằng `etcdctl snapshot status`) kèm sao lưu `/etc/kubernetes/pki/` về máy Deployer, và hỗ trợ khôi phục cụm 1-node / 3-node HA không bị split-brain.
-- [ ] **Task 15 — Bổ sung CNI Cilium (eBPF):** Hỗ trợ chọn `spec.networking.cni: cilium` song song với `calico` (kèm tùy chọn chạy không cần `kube-proxy` và đóng gói offline trong bundle).
-- [ ] **Task 16 — LAN HTTP Fan-out & Hỗ trợ Rocky/AlmaLinux/RHEL:** Nối `BundleServer` (`pkg/ssh/http_dist.go`, cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes) để phân phối bundle tốc độ cao trong LAN; mở rộng `preflight`/`os-prep` hỗ trợ thêm **Rocky Linux / AlmaLinux / RHEL 8–9** bên cạnh Ubuntu.
+- [x] **Task 13 — Scale cụm (`vkube add-node` & `vkube remove-node`):** Hỗ trợ thêm mới Worker/Control Plane vào cụm đang chạy và drain + gỡ node an toàn (kèm dọn `etcd` member nếu gỡ CP).
+- [x] **Task 14 — Backup & Restore `etcd` (`vkube backup` & `vkube restore`):** Tự động snapshot `etcd` (verify bằng `etcdctl snapshot status`) kèm sao lưu `/etc/kubernetes/pki/` về máy Deployer, và hỗ trợ khôi phục cụm 1-node / 3-node HA không bị split-brain.
+- [x] **Task 15 — Bổ sung CNI Cilium (eBPF):** Hỗ trợ chọn `spec.networking.cni: cilium` song song với `calico` (kèm tùy chọn chạy không cần `kube-proxy` và đóng gói offline trong bundle).
+- [x] **Task 16 — LAN HTTP Fan-out & Hỗ trợ Rocky/AlmaLinux/RHEL:** Nối `BundleServer` (`pkg/ssh/http_dist.go`, cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes) để phân phối bundle tốc độ cao trong LAN; mở rộng `preflight`/`os-prep` hỗ trợ thêm **Rocky Linux / AlmaLinux / RHEL 8–9** bên cạnh Ubuntu.
 
 ---
 

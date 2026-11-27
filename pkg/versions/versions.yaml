@@ -11,6 +11,7 @@ components:
   cni_plugins: v1.10.0
   crictl: v1.36.0
   calico: v3.33.1
+  cilium: v1.20.5
   kube_vip: v1.3.2
   coredns: v1.14.2
   pause: "3.10.2"
@@ -119,6 +120,12 @@ imageGroups:
       - quay.io/calico/calico:{{.Components.calico}}
       - quay.io/calico/node:{{.Components.calico}}
       - quay.io/calico/third-party-cni-plugins:{{.Components.calico}}
+
+  - name: cilium
+    dest: images/cilium.tar
+    images:
+      - quay.io/cilium/cilium:{{.Components.cilium}}
+      - quay.io/cilium/operator-generic:{{.Components.cilium}}
 
   - name: kube-vip
     dest: images/kube-vip.tar

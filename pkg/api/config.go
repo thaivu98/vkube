@@ -106,10 +106,13 @@ func (c *ClusterConfig) Validate() error {
 		errs = append(errs, fmt.Sprintf("spec.networking.serviceSubnet %q is not a valid CIDR", c.Spec.Networking.ServiceSubnet))
 	}
 	switch c.Spec.Networking.CNI {
-	case CNICalico:
-		// Hỗ trợ chính thức trong v0.1
+	case CNICalico, CNICilium:
+		// Hỗ trợ chính thức Calico và Cilium (eBPF)
 	default:
-		errs = append(errs, fmt.Sprintf("spec.networking.cni %q is not supported in v0.1 (supported: %s)", c.Spec.Networking.CNI, CNICalico))
+		errs = append(errs, fmt.Sprintf("spec.networking.cni %q is not supported (supported: %s, %s)", c.Spec.Networking.CNI, CNICalico, CNICilium))
+	}
+	if c.Spec.Networking.KubeProxyReplacement && c.Spec.Networking.CNI != CNICilium {
+		errs = append(errs, "spec.networking.kubeProxyReplacement is only supported when spec.networking.cni is \"cilium\"")
 	}
 
 	if c.Spec.VIP != "" && net.ParseIP(c.Spec.VIP) == nil {

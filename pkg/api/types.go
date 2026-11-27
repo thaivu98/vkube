@@ -133,9 +133,10 @@ type MetalLBAddon struct {
 
 // NetworkingConfig định nghĩa thông số mạng của cụm Kubernetes.
 type NetworkingConfig struct {
-	PodSubnet     string `yaml:"podSubnet,omitempty" json:"podSubnet,omitempty"`
-	ServiceSubnet string `yaml:"serviceSubnet,omitempty" json:"serviceSubnet,omitempty"`
-	CNI           string `yaml:"cni,omitempty" json:"cni,omitempty"`
+	PodSubnet            string `yaml:"podSubnet,omitempty" json:"podSubnet,omitempty"`
+	ServiceSubnet        string `yaml:"serviceSubnet,omitempty" json:"serviceSubnet,omitempty"`
+	CNI                  string `yaml:"cni,omitempty" json:"cni,omitempty"`
+	KubeProxyReplacement bool   `yaml:"kubeProxyReplacement,omitempty" json:"kubeProxyReplacement,omitempty"`
 }
 
 // SSHConfig chứa thông tin xác thực và kết nối SSH (hỗ trợ SSH agent, private key có/không passphrase và password).

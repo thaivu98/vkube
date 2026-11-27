@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ type ApplyOptions struct {
 	BundlePath    string // Nếu có -> chế độ Air-gapped; nếu rỗng -> chế độ Online trực tiếp
 	ManifestPath  string // File BOM versions.yaml tùy chỉnh (dùng ở chế độ Online)
 	KubeconfigOut string
+	FastSync      bool // Ép bật LAN HTTP BundleServer cho Air-gapped (mặc định tự bật với >= 3 nodes)
 }
 
 // Apply thực thi trọn gói pipeline triển khai cụm Vanilla Kubernetes (hỗ trợ cả Online trực tiếp lẫn Air-gapped Offline Bundle).
@@ -61,6 +63,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, opts ApplyOp
 	state := &ClusterState{
 		Config:         cfg,
 		OnlineMode:     onlineMode,
+		FastSync:       opts.FastSync,
 		BundlePath:     opts.BundlePath,
 		BundleManifest: manifest,
 		Pool:           pool,
@@ -109,10 +112,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *api.ClusterConfig, opts ApplyOp
 	fmt.Fprintf(e.Out, "  [timing]    kubeadm init/join: %s\n", time.Since(tStage).Round(time.Millisecond))
 
 	tStage = time.Now()
-	if err := e.runCalicoAndPostConfig(ctx, state, opts.KubeconfigOut); err != nil {
+	if err := e.runCNIAndPostConfig(ctx, state, opts.KubeconfigOut); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.Out, "  [timing]    Calico & Nodes Ready: %s\n", time.Since(tStage).Round(time.Millisecond))
+	fmt.Fprintf(e.Out, "  [timing]    CNI (%s) & Nodes Ready: %s\n", cfg.Spec.Networking.CNI, time.Since(tStage).Round(time.Millisecond))
 
 	tStage = time.Now()
 	if err := e.runAddons(ctx, state); err != nil {
@@ -201,6 +204,9 @@ trap 'rm -f /etc/vkube/kubeadm-init.yaml' EXIT
 /usr/local/bin/kubeadm init --config=/etc/vkube/kubeadm-init.yaml`, cp1User)
 	if isHA {
 		initCmd += " --upload-certs"
+	}
+	if state.Config.Spec.Networking.CNI == api.CNICilium && state.Config.Spec.Networking.KubeProxyReplacement {
+		initCmd += " --skip-phases=addon/kube-proxy"
 	}
 	// Trên VM 2GB ARM64, MemTotal khả dụng thường ~1600MB (< ngưỡng mặc định 1700MB của kubeadm).
 	if f := state.Facts[cp1.Name]; f != nil && f.MemoryMB > 0 && f.MemoryMB < 1750 {
@@ -378,20 +384,55 @@ rm -f "$USER_HOME/.vkube-tmp/kube-vip.yaml"`, sshUser))
 	return err
 }
 
-func (e *Engine) runCalicoAndPostConfig(ctx context.Context, state *ClusterState, kubeconfigOut string) error {
+func (e *Engine) runCNIAndPostConfig(ctx context.Context, state *ClusterState, kubeconfigOut string) error {
 	mode := "Air-gapped"
 	if state.OnlineMode {
 		mode = "Online"
 	}
-	fmt.Fprintf(e.Out, "==> [6/6] Cài đặt Calico CNI (%s), áp dụng Labels/Taints & xuất kubeconfig...\n", mode)
+	cni := state.Config.Spec.Networking.CNI
+	fmt.Fprintf(e.Out, "==> [6/6] Cài đặt %s CNI (%s), áp dụng Labels/Taints & xuất kubeconfig...\n", strings.ToUpper(cni), mode)
 	cp1 := state.Config.ControlPlanes()[0]
 	cp1Runner, err := state.Pool.Get(cp1.Name)
 	if err != nil {
 		return err
 	}
 
-	// Patch Calico manifest và xác minh bằng grep rằng PodSubnet đã được ghi đúng trước khi apply (tránh fallback âm thầm về 192.168.0.0/16)
-	calicoScript := fmt.Sprintf(`set -euo pipefail
+	if cni == api.CNICilium {
+		ciliumVer := state.BundleManifest.Components["cilium"]
+		if ciliumVer == "" {
+			return fmt.Errorf("BOM missing cilium component version")
+		}
+		k8sHost := cp1.Host
+		k8sPort := "6443"
+		if state.Config.Spec.ControlPlaneEndpoint != "" {
+			if h, p, err := net.SplitHostPort(state.Config.Spec.ControlPlaneEndpoint); err == nil {
+				k8sHost, k8sPort = h, p
+			}
+		} else if state.Config.Spec.VIP != "" {
+			k8sHost = state.Config.Spec.VIP
+		}
+		ciliumYAML := templates.RenderCilium(templates.CiliumData{
+			Version:              ciliumVer,
+			PodSubnet:            state.Config.Spec.Networking.PodSubnet,
+			KubeProxyReplacement: state.Config.Spec.Networking.KubeProxyReplacement,
+			K8sServiceHost:       k8sHost,
+			K8sServicePort:       k8sPort,
+		})
+		if err := cp1Runner.WriteFile(ctx, ciliumYAML, ".vkube-tmp/cilium.yaml", 0o600); err != nil {
+			return fmt.Errorf("upload cilium manifest: %w", err)
+		}
+		cp1User := state.Config.EffectiveSSH(cp1).User
+		ciliumCmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+F="$USER_HOME/.vkube-tmp/cilium.yaml"
+trap 'rm -f "$F"' EXIT
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts -f "$F"`, cp1User)
+		if _, err := cp1Runner.RunSudo(ctx, ciliumCmd); err != nil {
+			return fmt.Errorf("apply Cilium eBPF CNI: %w", err)
+		}
+	} else {
+		// Patch Calico manifest và xác minh bằng grep rằng PodSubnet đã được ghi đúng trước khi apply (tránh fallback âm thầm về 192.168.0.0/16)
+		calicoScript := fmt.Sprintf(`set -euo pipefail
 CALICO_FILE="%s/calico.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$CALICO_FILE"
 sed -i 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|g' "$CALICO_FILE"
@@ -403,8 +444,9 @@ fi
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$CALICO_FILE"
 `, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
 
-	if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
-		return fmt.Errorf("apply offline Calico CNI: %w", err)
+		if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
+			return fmt.Errorf("apply Calico CNI: %w", err)
+		}
 	}
 
 	// Áp dụng Labels, Taints và chính sách bảo vệ Control Plane

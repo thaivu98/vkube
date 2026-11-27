@@ -38,10 +38,14 @@ printf "OS_ID=%s\nOS_VER=%s\nARCH=%s\nKERNEL=%s\nHOSTNAME=%s\nIFACE=%s\nCPUS=%s\
 // RunPreflight thu thập NodeFacts đúng 1 lần song song trên toàn bộ nodes, lưu vào state.Facts
 // và kiểm tra OS, kiến trúc khớp Offline Bundle, tài nguyên tối thiểu cũng như chống trùng IP VIP.
 func (e *Engine) RunPreflight(ctx context.Context, state *ClusterState) error {
-	fmt.Fprintf(e.Out, "==> [1/6] Preflight: Thu thập NodeFacts (1 lần duy nhất) & kiểm tra %d node(s)...\n", len(state.Config.Spec.Nodes))
+	return e.runPreflightNodes(ctx, state, state.Config.Spec.Nodes, true)
+}
+
+func (e *Engine) runPreflightNodes(ctx context.Context, state *ClusterState, nodes []api.NodeConfig, checkVIP bool) error {
+	fmt.Fprintf(e.Out, "==> [1/6] Preflight: Thu thập NodeFacts (1 lần duy nhất) & kiểm tra %d node(s)...\n", len(nodes))
 
 	var mu sync.Mutex
-	err := state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+	err := state.Pool.RunParallel(ctx, nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		res, err := r.RunSudo(ctx, preflightProbeScript)
 		if err != nil {
 			return fmt.Errorf("probe node facts: %w", err)
@@ -68,7 +72,7 @@ func (e *Engine) RunPreflight(ctx context.Context, state *ClusterState) error {
 
 	// Đảm bảo toàn bộ các node trong cụm có cùng kiến trúc CPU (chống lẫn amd64/arm64 ở chế độ Online).
 	var expectedArch string
-	for _, n := range state.Config.Spec.Nodes {
+	for _, n := range nodes {
 		f := state.Facts[n.Name]
 		if f == nil {
 			continue
@@ -83,7 +87,7 @@ func (e *Engine) RunPreflight(ctx context.Context, state *ClusterState) error {
 	}
 
 	// Kiểm tra trên toàn bộ nodes: chưa cài cụm & các port bắt buộc còn trống (CP: 6443/2379/2380/10250, Worker: 10250).
-	if err := state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+	if err := state.Pool.RunParallel(ctx, nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		ports := "10250"
 		if node.Role == api.RoleControlPlane {
 			ports = "6443 2379 2380 10250"
@@ -117,20 +121,23 @@ echo "OK"
 		return err
 	}
 
+	if !checkVIP || state.Config.Spec.VIP == "" {
+		return nil
+	}
+
 	// Kiểm tra chống trùng IP VIP trên mạng LAN thực tế từ Primary Control Plane.
 	cp1 := state.Config.ControlPlanes()[0]
 	cp1Runner, err := state.Pool.Get(cp1.Name)
 	if err != nil {
 		return err
 	}
-	if state.Config.Spec.VIP != "" {
-		iface := state.Config.Spec.VIPInterface
-		if iface == "" && state.Facts[cp1.Name] != nil {
-			iface = state.Facts[cp1.Name].DefaultInterface
-		}
-		fmt.Fprintf(e.Out, "  [preflight] Kiểm tra VIP %s chưa bị thiết bị nào khác chiếm dụng trong LAN...\n", state.Config.Spec.VIP)
-		// Chỉ dùng iputils arping -D khi xác nhận đúng bản iputils; nếu rc khác 0/1 (ví dụ lỗi 2) thì fallback ping.
-		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && arping -V 2>&1 | grep -qi iputils && [ -n %q ]; then
+	iface := state.Config.Spec.VIPInterface
+	if iface == "" && state.Facts[cp1.Name] != nil {
+		iface = state.Facts[cp1.Name].DefaultInterface
+	}
+	fmt.Fprintf(e.Out, "  [preflight] Kiểm tra VIP %s chưa bị thiết bị nào khác chiếm dụng trong LAN...\n", state.Config.Spec.VIP)
+	// Chỉ dùng iputils arping -D khi xác nhận đúng bản iputils; nếu rc khác 0/1 (ví dụ lỗi 2) thì fallback ping.
+	checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && arping -V 2>&1 | grep -qi iputils && [ -n %q ]; then
   arping -D -I %q -c 2 -w 2 %s >/dev/null 2>&1
   rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -143,13 +150,12 @@ echo "OK"
 else
   ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE
 fi`, iface, iface, state.Config.Spec.VIP, state.Config.Spec.VIP, state.Config.Spec.VIP)
-		res, err := cp1Runner.RunSudo(ctx, checkCmd)
-		if err != nil {
-			return fmt.Errorf("check VIP availability on %s: %w", cp1.Name, err)
-		}
-		if strings.TrimSpace(res.Stdout) == "IN_USE" {
-			return fmt.Errorf("VIP %s is already responding on the network (possible IP conflict); choose an unused static IP in the same subnet", state.Config.Spec.VIP)
-		}
+	res, err := cp1Runner.RunSudo(ctx, checkCmd)
+	if err != nil {
+		return fmt.Errorf("check VIP availability on %s: %w", cp1.Name, err)
+	}
+	if strings.TrimSpace(res.Stdout) == "IN_USE" {
+		return fmt.Errorf("VIP %s is already responding on the network (possible IP conflict); choose an unused static IP in the same subnet", state.Config.Spec.VIP)
 	}
 
 	return nil
@@ -203,14 +209,39 @@ func normalizeLinuxArch(raw string) (string, error) {
 	}
 }
 
-func validateNodeFacts(node api.NodeConfig, facts *api.NodeFacts, cfg *api.ClusterConfig, manifest *api.BundleManifest) error {
-	if facts.OSID != "ubuntu" {
-		return fmt.Errorf("unsupported OS %q %s (vkube v0.1 targets Ubuntu >= 22.04)", facts.OSID, facts.OSVersion)
+func isRHELFamily(osID string) bool {
+	switch strings.ToLower(strings.TrimSpace(osID)) {
+	case "rocky", "almalinux", "rhel":
+		return true
+	default:
+		return false
 	}
-	if majorStr, _, ok := strings.Cut(facts.OSVersion, "."); ok {
-		if major, err := strconv.Atoi(majorStr); err == nil && major < 22 {
+}
+
+func parseMajorVersion(ver string) (int, bool) {
+	majorStr := ver
+	if s, _, ok := strings.Cut(ver, "."); ok {
+		majorStr = s
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(majorStr))
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func validateNodeFacts(node api.NodeConfig, facts *api.NodeFacts, cfg *api.ClusterConfig, manifest *api.BundleManifest) error {
+	switch facts.OSID {
+	case "ubuntu":
+		if major, ok := parseMajorVersion(facts.OSVersion); ok && major < 22 {
 			return fmt.Errorf("unsupported Ubuntu version %s (minimum required: 22.04)", facts.OSVersion)
 		}
+	case "rocky", "almalinux", "rhel":
+		if major, ok := parseMajorVersion(facts.OSVersion); ok && major < 8 {
+			return fmt.Errorf("unsupported %s version %s (minimum required: 8)", facts.OSID, facts.OSVersion)
+		}
+	default:
+		return fmt.Errorf("unsupported OS %q %s (supported: Ubuntu >= 22.04, Rocky/AlmaLinux/RHEL >= 8)", facts.OSID, facts.OSVersion)
 	}
 	if cfg.Spec.Arch != api.ArchAuto && facts.Arch != cfg.Spec.Arch {
 		return fmt.Errorf("node arch %q does not match cluster spec.arch %q", facts.Arch, cfg.Spec.Arch)
@@ -259,6 +290,7 @@ func NewEngine(out io.Writer) *Engine {
 type ClusterState struct {
 	Config         *api.ClusterConfig
 	OnlineMode     bool
+	FastSync       bool
 	BundlePath     string
 	BundleManifest *api.BundleManifest
 	ResolvedBOM    *versions.ResolvedBOM

@@ -58,6 +58,34 @@ func KubeletService() []byte    { return mustRead("files/kubelet.service") }
 func KubeadmDropin() []byte     { return mustRead("files/10-kubeadm.conf") }
 func CrictlConfig() []byte      { return mustRead("files/crictl.yaml") }
 
+// CiliumData chứa tham số render manifest Cilium eBPF CNI.
+type CiliumData struct {
+	Version              string
+	PodSubnet            string
+	KubeProxyReplacement bool
+	K8sServiceHost       string
+	K8sServicePort       string
+}
+
+// RenderCilium render manifest Cilium eBPF CNI (kèm tùy chọn kubeProxyReplacement)
+// với phiên bản image và thông số cụm được bơm động từ BOM & ClusterConfig.
+func RenderCilium(data CiliumData) []byte {
+	kpr := "false"
+	if data.KubeProxyReplacement {
+		kpr = "true"
+	}
+	if data.K8sServicePort == "" {
+		data.K8sServicePort = "6443"
+	}
+	s := string(mustRead("files/cilium.yaml"))
+	s = strings.ReplaceAll(s, "__VKUBE_CILIUM_VERSION__", data.Version)
+	s = strings.ReplaceAll(s, "__VKUBE_POD_SUBNET__", data.PodSubnet)
+	s = strings.ReplaceAll(s, "__VKUBE_KUBE_PROXY_REPLACEMENT__", kpr)
+	s = strings.ReplaceAll(s, "__VKUBE_K8S_SERVICE_HOST__", data.K8sServiceHost)
+	s = strings.ReplaceAll(s, "__VKUBE_K8S_SERVICE_PORT__", data.K8sServicePort)
+	return []byte(s)
+}
+
 // RenderKongDBLess render manifest Kong Ingress Controller v3.x (DB-less, kèm Namespace & IngressClass)
 // với phiên bản image được bơm động từ BOM (pkg/versions/versions.yaml).
 func RenderKongDBLess(gatewayVersion, controllerVersion string) []byte {

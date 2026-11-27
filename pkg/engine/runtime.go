@@ -26,14 +26,18 @@ const (
 // RunRuntimeAndArtifacts cài đặt binaries, containerd (SystemdCgroup=true), kubelet và images
 // song song trên tất cả các node (tự động chọn chế độ Online trực tiếp hoặc Offline Bundle).
 func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState) error {
+	return e.runRuntimeNodes(ctx, state, state.Config.Spec.Nodes)
+}
+
+func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targetNodes []api.NodeConfig) error {
 	if state.OnlineMode {
-		return e.runRuntimeOnline(ctx, state)
+		return e.runRuntimeOnlineNodes(ctx, state, targetNodes)
 	}
 	fmt.Fprintf(e.Out, "==> [3/6] Runtime & Artifacts (Air-gapped): Đẩy Offline Bundle, cài containerd/kubelet & nạp OCI images song song...\n")
 
 	// Kiểm tra xem có node nào thiếu binary zstd không; nếu có thì giải nén 1 lần thành .tar tạm bằng Pure Go.
 	needPlainTar := false
-	for _, n := range state.Config.Spec.Nodes {
+	for _, n := range targetNodes {
 		if f := state.Facts[n.Name]; f != nil && !f.HasZstd {
 			needPlainTar = true
 			break
@@ -51,28 +55,73 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 		defer os.Remove(plainTarPath)
 	}
 
+	// Bật LAN HTTP Fan-out (BundleServer Pure Go) khi --fast-sync hoặc cụm >= 3 node để phát tán bundle cực nhanh trong LAN;
+	// nếu firewall máy Deployer chặn port HTTP, từng node sẽ tự động fallback sang SFTP an toàn.
+	var (
+		zstHTTPURL   string
+		plainHTTPURL string
+	)
+	if (state.FastSync || len(targetNodes) >= 3) && len(targetNodes) > 0 {
+		if lanIP, err := ssh.OutboundIP(targetNodes[0].Host); err == nil {
+			if srv, err := ssh.NewBundleServer(state.BundlePath); err == nil {
+				if err := srv.Start(":0"); err == nil {
+					defer srv.Shutdown(context.Background())
+					if u, err := srv.URLForHost(lanIP); err == nil {
+						zstHTTPURL = u
+						fmt.Fprintf(e.Out, "  [fast-sync] Bật LAN HTTP BundleServer (%s) để phát tán song song tới %d node(s)...\n", lanIP, len(targetNodes))
+					}
+				}
+			}
+			if plainTarPath != "" {
+				if srv, err := ssh.NewBundleServer(plainTarPath); err == nil {
+					if err := srv.Start(":0"); err == nil {
+						defer srv.Shutdown(context.Background())
+						if u, err := srv.URLForHost(lanIP); err == nil {
+							plainHTTPURL = u
+						}
+					}
+				}
+			}
+		}
+	}
+
 	pauseVersion := state.BundleManifest.Components["pause"]
 	if pauseVersion == "" {
-		pauseVersion = "3.10"
+		pauseVersion = "3.10.2"
 	}
 	sandboxImage := fmt.Sprintf("registry.k8s.io/pause:%s", pauseVersion)
 
-	return state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+	return state.Pool.RunParallel(ctx, targetNodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		facts := state.Facts[node.Name]
 		useZstd := facts != nil && facts.HasZstd
 
 		localUpload := state.BundlePath
 		remoteArchive := "/var/tmp/vkube-bundle.tar.zst"
 		extractCmd := fmt.Sprintf("tar --zstd -xf %s -C %s", remoteArchive, remoteWorkDir)
+		httpURL := zstHTTPURL
 		if !useZstd {
 			localUpload = plainTarPath
 			remoteArchive = "/var/tmp/vkube-bundle.tar"
 			extractCmd = fmt.Sprintf("tar -xf %s -C %s", remoteArchive, remoteWorkDir)
+			httpURL = plainHTTPURL
 		}
 
-		fmt.Fprintf(e.Out, "  [artifacts] %-12s đang tải Offline Bundle lên node...\n", node.Name)
-		if err := r.UploadFile(ctx, localUpload, remoteArchive); err != nil {
-			return fmt.Errorf("upload bundle: %w", err)
+		syncedViaHTTP := false
+		if httpURL != "" {
+			fmt.Fprintf(e.Out, "  [artifacts] %-12s đang kéo Offline Bundle qua LAN HTTP fast-sync...\n", node.Name)
+			dlCmd := fmt.Sprintf("curl -fsSL --connect-timeout 5 %q -o %s", httpURL, remoteArchive)
+			if _, err := r.RunSudo(ctx, dlCmd); err == nil {
+				syncedViaHTTP = true
+			} else {
+				_, _ = r.RunSudo(ctx, fmt.Sprintf("rm -f %s", remoteArchive))
+				fmt.Fprintf(e.Out, "  [artifacts] %-12s LAN HTTP không kết nối được (có thể do firewall), chuyển sang SFTP...\n", node.Name)
+			}
+		}
+		if !syncedViaHTTP {
+			fmt.Fprintf(e.Out, "  [artifacts] %-12s đang tải Offline Bundle lên node (SFTP)...\n", node.Name)
+			if err := r.UploadFile(ctx, localUpload, remoteArchive); err != nil {
+				return fmt.Errorf("upload bundle: %w", err)
+			}
 		}
 
 		// Ghi các file cấu hình systemd & crictl vào thư mục riêng .vkube-tmp (tránh dùng /tmp dùng chung)
@@ -213,18 +262,18 @@ sed -i -E "s|^([[:space:]]*sandbox = )['\"].*['\"]|\1'%s'|g" /etc/containerd/con
 sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml`, sandboxImage, sandboxImage)
 }
 
-// runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node,
+// runRuntimeOnlineNodes tải trực tiếp binaries & manifests song song trên từng node,
 // kèm kiểm tra SHA256 ngay trên node trước khi cài đặt vào /usr/local/bin.
-func (e *Engine) runRuntimeOnline(ctx context.Context, state *ClusterState) error {
+func (e *Engine) runRuntimeOnlineNodes(ctx context.Context, state *ClusterState, targetNodes []api.NodeConfig) error {
 	fmt.Fprintf(e.Out, "==> [3/6] Runtime & Artifacts (Online): Tải trực tiếp binaries, verify SHA256 & cấu hình containerd/kubelet song song...\n")
 
 	pauseVersion := state.BundleManifest.Components["pause"]
 	if pauseVersion == "" {
-		pauseVersion = "3.10"
+		pauseVersion = "3.10.2"
 	}
 	sandboxImage := fmt.Sprintf("registry.k8s.io/pause:%s", pauseVersion)
 
-	return state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+	return state.Pool.RunParallel(ctx, targetNodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		if err := r.WriteFile(ctx, templates.ContainerdService(), ".vkube-tmp/containerd.service", 0o600); err != nil {
 			return err
 		}

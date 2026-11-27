@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,7 +28,8 @@ func (f *fakeNodeRunner) Run(_ context.Context, _ string) (ssh.ExecResult, error
 func (f *fakeNodeRunner) RunSudo(_ context.Context, _ string) (ssh.ExecResult, error) {
 	return ssh.ExecResult{Stdout: f.output}, nil
 }
-func (f *fakeNodeRunner) UploadFile(_ context.Context, _, _ string) error { return nil }
+func (f *fakeNodeRunner) UploadFile(_ context.Context, _, _ string) error   { return nil }
+func (f *fakeNodeRunner) DownloadFile(_ context.Context, _, _ string) error { return nil }
 func (f *fakeNodeRunner) WriteFile(_ context.Context, _ []byte, _ string, _ os.FileMode) error {
 	return nil
 }
@@ -188,6 +192,128 @@ func TestContainerdConfigPatchCmd(t *testing.T) {
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("expected %q in containerdConfigPatchCmd:\n%s", want, cmd)
+		}
+	}
+}
+
+func TestScaleHelpers(t *testing.T) {
+	all := []api.NodeConfig{
+		{Name: "cp-1", Host: "10.0.0.1", Role: api.RoleControlPlane},
+		{Name: "cp-2", Host: "10.0.0.2", Role: api.RoleControlPlane},
+		{Name: "worker-1", Host: "10.0.0.3", Role: api.RoleWorker},
+	}
+	existing := map[string]struct{}{"cp-1": {}}
+
+	// Auto-detect missing nodes
+	added, err := selectNodesToAdd(all, existing, "")
+	if err != nil || len(added) != 2 {
+		t.Fatalf("expected 2 new nodes, got %v (err=%v)", added, err)
+	}
+	// Request specific new node
+	one, err := selectNodesToAdd(all, existing, "worker-1")
+	if err != nil || len(one) != 1 || one[0].Name != "worker-1" {
+		t.Fatalf("expected worker-1, got %v (err=%v)", one, err)
+	}
+	// Reject already-existing node
+	if _, err := selectNodesToAdd(all, existing, "cp-1"); err == nil {
+		t.Fatal("expected error for already-existing node cp-1")
+	}
+
+	// pickActiveControlPlane protects last remaining CP
+	singleCP := &api.ClusterConfig{Spec: api.ClusterSpec{Nodes: []api.NodeConfig{all[0]}}}
+	if _, err := pickActiveControlPlane(singleCP, "cp-1"); err == nil {
+		t.Fatal("expected refusal when removing last control-plane")
+	}
+	multiCP := &api.ClusterConfig{Spec: api.ClusterSpec{Nodes: all}}
+	active, err := pickActiveControlPlane(multiCP, "cp-1")
+	if err != nil || active.Name != "cp-2" {
+		t.Fatalf("expected active CP cp-2, got %+v (err=%v)", active, err)
+	}
+
+	// parseUploadCertsKey
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	parsedKey, err := parseUploadCertsKey("[upload-certs] Storing the certificates...\nUsing certificate key:\n" + key + "\n")
+	if err != nil || parsedKey != key {
+		t.Fatalf("parseUploadCertsKey got %q (err=%v)", parsedKey, err)
+	}
+
+	// parseEtcdMemberID
+	memberOut := "8e9e05c52164694d, started, cp-1, https://10.0.0.1:2380, https://10.0.0.1:2379, false\nabcdef1234567890, started, cp-2, https://10.0.0.2:2380, https://10.0.0.2:2379, false\n"
+	if id := parseEtcdMemberID(memberOut, "cp-2", "10.0.0.2"); id != "abcdef1234567890" {
+		t.Fatalf("expected etcd member ID abcdef1234567890, got %q", id)
+	}
+}
+
+func TestBackupAndRestoreHelpers(t *testing.T) {
+	cps := []api.NodeConfig{
+		{Name: "cp-1", Host: "10.0.0.1", Role: api.RoleControlPlane},
+		{Name: "cp-2", Host: "10.0.0.2", Role: api.RoleControlPlane},
+		{Name: "cp-3", Host: "10.0.0.3", Role: api.RoleControlPlane},
+	}
+	got := buildEtcdInitialCluster(cps)
+	want := "cp-1=https://10.0.0.1:2380,cp-2=https://10.0.0.2:2380,cp-3=https://10.0.0.3:2380"
+	if got != want {
+		t.Fatalf("buildEtcdInitialCluster = %q, want %q", got, want)
+	}
+
+	// Tạo archive backup hợp lệ bằng Pure Go và kiểm tra verifyBackupArchive
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	writeEntry := func(name, content string) {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(content))})
+		_, _ = tw.Write([]byte(content))
+	}
+	writeEntry("etcd-snapshot.db", "fake-etcd-db-bytes")
+	writeEntry("pki/ca.crt", "fake-cert")
+	_ = tw.Close()
+	_ = gw.Close()
+	_ = f.Close()
+
+	if err := verifyBackupArchive(archivePath); err != nil {
+		t.Fatalf("expected valid backup archive, got error: %v", err)
+	}
+}
+
+func TestValidateNodeFacts_RHELAndRockySupport(t *testing.T) {
+	cfg := &api.ClusterConfig{Spec: api.ClusterSpec{Arch: api.ArchAuto}}
+	node := api.NodeConfig{Name: "cp-1", Role: api.RoleControlPlane}
+
+	for _, tc := range []struct {
+		osID    string
+		osVer   string
+		wantErr bool
+	}{
+		{"ubuntu", "24.04", false},
+		{"ubuntu", "20.04", true},
+		{"rocky", "9.4", false},
+		{"rocky", "8.10", false},
+		{"rocky", "7.9", true},
+		{"almalinux", "9.4", false},
+		{"rhel", "8.9", false},
+		{"alpine", "3.20", true},
+	} {
+		facts := &api.NodeFacts{OSID: tc.osID, OSVersion: tc.osVer, Arch: api.ArchARM64, CPUCores: 2, MemoryMB: 2048}
+		err := validateNodeFacts(node, facts, cfg, nil)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("validateNodeFacts(%s %s): err=%v, wantErr=%v", tc.osID, tc.osVer, err, tc.wantErr)
+		}
+	}
+
+	rhelCP := buildRHELPrepScript(api.RoleControlPlane)
+	for _, want := range []string{"SELINUX=permissive", "6443/tcp", "2379-2380/tcp", "4240/tcp", "8472/udp"} {
+		if !strings.Contains(rhelCP, want) {
+			t.Errorf("expected %q in RHEL prep script:\n%s", want, rhelCP)
+		}
+	}
+	resetScript := buildNodeResetScript("10.0.0.250")
+	for _, want := range []string{"10.0.0.250/32", "CILIUM_", "cilium_host", "lxc"} {
+		if !strings.Contains(resetScript, want) {
+			t.Errorf("expected %q in reset script:\n%s", want, resetScript)
 		}
 	}
 }

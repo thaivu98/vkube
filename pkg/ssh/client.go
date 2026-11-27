@@ -39,6 +39,7 @@ type Runner interface {
 	Run(ctx context.Context, command string) (ExecResult, error)
 	RunSudo(ctx context.Context, command string) (ExecResult, error)
 	UploadFile(ctx context.Context, localPath, remotePosixPath string) error
+	DownloadFile(ctx context.Context, remotePosixPath, localPath string) error
 	WriteFile(ctx context.Context, content []byte, remotePosixPath string, mode os.FileMode) error
 	Close() error
 }
@@ -235,6 +236,40 @@ func (c *Client) WriteFile(ctx context.Context, content []byte, remotePosixPath 
 	if _, err := dst.Write(content); err != nil {
 		_ = dst.Close()
 		return fmt.Errorf("sftp write %s on %s: %w", remotePosixPath, c.nodeName, err)
+	}
+	return dst.Close()
+}
+
+// DownloadFile tải một file từ Target Node Linux về máy Deployer bằng Pure Go SFTP (quyền 0600 để bảo vệ dữ liệu nhạy cảm như backup PKI/etcd).
+func (c *Client) DownloadFile(ctx context.Context, remotePosixPath, localPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sftpClient, err := sftp.NewClient(c.conn)
+	if err != nil {
+		return fmt.Errorf("open sftp session on %s: %w", c.nodeName, err)
+	}
+	defer sftpClient.Close()
+
+	src, err := sftpClient.Open(remotePosixPath)
+	if err != nil {
+		return fmt.Errorf("sftp open remote %s on %s: %w", remotePosixPath, c.nodeName, err)
+	}
+	defer src.Close()
+
+	if dir := filepath.Dir(localPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create local dir %q: %w", dir, err)
+		}
+	}
+	dst, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create local file %q: %w", localPath, err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(localPath)
+		return fmt.Errorf("sftp download %s -> %s: %w", remotePosixPath, localPath, err)
 	}
 	return dst.Close()
 }

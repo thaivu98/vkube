@@ -115,3 +115,28 @@ func TestRenderKongDBLess(t *testing.T) {
 		t.Errorf("rendered Kong manifest still contains unreplaced placeholder")
 	}
 }
+
+func TestRenderCilium(t *testing.T) {
+	s := string(RenderCilium(CiliumData{
+		Version:              "v1.20.5",
+		PodSubnet:            "10.244.0.0/16",
+		KubeProxyReplacement: true,
+		K8sServiceHost:       "192.0.2.250",
+		K8sServicePort:       "6443",
+	}))
+	for _, want := range []string{
+		`quay.io/cilium/cilium:v1.20.5`,
+		`quay.io/cilium/operator-generic:v1.20.5`,
+		`cluster-pool-ipv4-cidr: "10.244.0.0/16"`,
+		`kube-proxy-replacement: "true"`,
+		`value: "192.0.2.250"`,
+		`value: "6443"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected %q in rendered Cilium manifest", want)
+		}
+	}
+	if strings.Contains(s, "__VKUBE_") {
+		t.Errorf("rendered Cilium manifest still contains unreplaced placeholder")
+	}
+}

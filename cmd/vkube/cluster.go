@@ -14,6 +14,7 @@ func newApplyCmd() *cobra.Command {
 		bundleFile      string
 		manifestPath    string
 		kubeconfigOut   string
+		fastSync        bool
 		dryRun          bool
 		insecureHostKey bool
 	)
@@ -64,6 +65,7 @@ func newApplyCmd() *cobra.Command {
 				BundlePath:    bundleFile,
 				ManifestPath:  manifestPath,
 				KubeconfigOut: kubeconfigOut,
+				FastSync:      fastSync,
 			})
 		},
 	}
@@ -72,6 +74,7 @@ func newApplyCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&bundleFile, "bundle", "b", "", "Đường dẫn tới Offline Bundle (.tar.zst) cho môi trường Air-gapped (bỏ trống để cài Online trực tiếp)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Đường dẫn file BOM (versions.yaml) tùy chỉnh khi cài Online")
 	cmd.Flags().StringVar(&kubeconfigOut, "kubeconfig-out", "", "Đường dẫn lưu file kubeconfig sau khi cài xong (mặc định: kubeconfig-<cluster>.yaml)")
+	cmd.Flags().BoolVar(&fastSync, "fast-sync", false, "Ép bật LAN HTTP BundleServer phát tán Offline Bundle tốc độ cao (mặc định tự bật với >= 3 nodes)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Chỉ kiểm tra cấu hình cluster.yaml và in tóm tắt cụm")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts (chỉ nên dùng cho VM lab hay reset snapshot)")
 	return cmd

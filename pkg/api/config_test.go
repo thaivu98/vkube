@@ -272,6 +272,20 @@ spec:
 `,
 			wantErr: "must be a valid IP address for control-plane nodes",
 		},
+		{
+			name: "kubeProxyReplacement without cilium",
+			yaml: `
+spec:
+  arch: arm64
+  networking:
+    cni: calico
+    kubeProxyReplacement: true
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`,
+			wantErr: `only supported when spec.networking.cni is "cilium"`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -284,5 +298,27 @@ spec:
 				t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestParseClusterConfig_CiliumWithKubeProxyReplacement(t *testing.T) {
+	yamlCfg := `
+metadata:
+  name: cilium-cluster
+spec:
+  arch: arm64
+  networking:
+    cni: cilium
+    kubeProxyReplacement: true
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`
+	cfg, err := ParseClusterConfig([]byte(yamlCfg))
+	if err != nil {
+		t.Fatalf("expected valid Cilium config, got: %v", err)
+	}
+	if cfg.Spec.Networking.CNI != CNICilium || !cfg.Spec.Networking.KubeProxyReplacement {
+		t.Fatalf("unexpected networking config: %+v", cfg.Spec.Networking)
 	}
 }

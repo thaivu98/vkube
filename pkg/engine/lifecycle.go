@@ -57,6 +57,42 @@ echo "[Node Metrics (kubectl top nodes)]"
 	return nil
 }
 
+// buildNodeResetScript sinh script gỡ bỏ Kubernetes an toàn trên 1 node (dùng chung cho `vkube reset` và `vkube remove-node`),
+// chỉ dọn các chain iptables & interface CNI (Calico/Cilium) và địa chỉ VIP tồn dư, tuyệt đối không flush tường lửa của host.
+func buildNodeResetScript(vip string) string {
+	vipCleanup := ""
+	if vip != "" {
+		vipCleanup = fmt.Sprintf(`
+# Gỡ địa chỉ VIP còn sót trên card mạng sau khi kube-vip static pod dừng
+for dev in $(ip -o addr show | awk '/%s\/32/ {print $2}'); do
+  ip addr del %s/32 dev "$dev" 2>/dev/null || true
+done`, vip, vip)
+	}
+	return fmt.Sprintf(`set -euo pipefail
+if [ -x /usr/local/bin/kubeadm ]; then
+  /usr/local/bin/kubeadm reset -f --cri-socket unix:///run/containerd/containerd.sock || true
+fi
+systemctl stop kubelet || true
+rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /var/tmp/vkube-bundle* /sys/fs/bpf/tc/globals/cilium_*
+%s
+
+# Chỉ dọn các chain của Kubernetes, Calico & Cilium, TUYỆT ĐỐI không flush toàn bộ firewall (ufw/firewalld/SSH) của host
+if command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev/null 2>&1; then
+  iptables-save | grep -vE '(KUBE-|cali-|FELIX-|CILIUM_)' | iptables-restore || true
+fi
+
+# Dọn các interface mạng ảo còn sót của Calico/Cilium/CNI (cắt hậu tố @ifN từ ip -o link)
+for iface in tunl0 vxlan.calico cni0 flannel.1 cilium_host cilium_net cilium_vxlan; do
+  ip link delete "$iface" 2>/dev/null || true
+done
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep -E '^(cali|lxc)' || true); do
+  ip link delete "$iface" 2>/dev/null || true
+done
+
+systemctl restart containerd || true
+`, vipCleanup)
+}
+
 // Reset gỡ bỏ cụm Kubernetes song song trên toàn bộ nodes và dọn sạch cấu hình/CNI/etcd.
 func (e *Engine) Reset(ctx context.Context, cfg *api.ClusterConfig) error {
 	start := time.Now()
@@ -67,38 +103,7 @@ func (e *Engine) Reset(ctx context.Context, cfg *api.ClusterConfig) error {
 	defer pool.Close()
 
 	fmt.Fprintf(e.Out, "==> Đang gỡ bỏ cụm %q song song trên %d node(s)...\n", cfg.Metadata.Name, len(cfg.Spec.Nodes))
-	vipCleanup := ""
-	if cfg.Spec.VIP != "" {
-		vipCleanup = fmt.Sprintf(`
-# Gỡ địa chỉ VIP còn sót trên card mạng sau khi kube-vip static pod dừng
-for dev in $(ip -o addr show | awk '/%s\/32/ {print $2}'); do
-  ip addr del %s/32 dev "$dev" 2>/dev/null || true
-done`, cfg.Spec.VIP, cfg.Spec.VIP)
-	}
-
-	resetScript := fmt.Sprintf(`set -euo pipefail
-if [ -x /usr/local/bin/kubeadm ]; then
-  /usr/local/bin/kubeadm reset -f --cri-socket unix:///run/containerd/containerd.sock || true
-fi
-systemctl stop kubelet || true
-rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /var/tmp/vkube-bundle*
-%s
-
-# Chỉ dọn các chain của Kubernetes & Calico, TUYỆT ĐỐI không flush toàn bộ firewall (ufw/SSH) của host
-if command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev/null 2>&1; then
-  iptables-save | grep -vE '(KUBE-|cali-|FELIX-)' | iptables-restore || true
-fi
-
-# Dọn các interface mạng ảo còn sót của Calico/CNI (cắt hậu tố @ifN từ ip -o link)
-for iface in tunl0 vxlan.calico cni0 flannel.1; do
-  ip link delete "$iface" 2>/dev/null || true
-done
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep -E '^cali' || true); do
-  ip link delete "$iface" 2>/dev/null || true
-done
-
-systemctl restart containerd || true
-`, vipCleanup)
+	resetScript := buildNodeResetScript(cfg.Spec.VIP)
 	if err := pool.RunParallel(ctx, cfg.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		if _, err := r.RunSudo(ctx, resetScript); err != nil {
 			return err
