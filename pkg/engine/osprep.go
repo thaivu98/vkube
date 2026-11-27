@@ -98,7 +98,7 @@ func buildHostsBlock(nodes []api.NodeConfig) string {
 	var b strings.Builder
 	b.WriteString(hostsMarkerStart + "\n")
 	for _, n := range nodes {
-		fmt.Fprintf(&b, "%s %s\n", n.Host, n.Name)
+		fmt.Fprintf(&b, "%s %s\n", n.EffectiveNodeIP(), n.Name)
 	}
 	b.WriteString(hostsMarkerEnd)
 	return b.String()

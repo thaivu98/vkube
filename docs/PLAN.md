@@ -26,12 +26,22 @@
     - **Online trực tiếp (1 CP + 2 Worker + đủ 4 Core Addons + verify SHA256 + SSH TOFU):** **2 phút 43 giây (`2m43s`)**.
     - **3-Control-Plane HA + `kube-vip` VIP (Online, 3× `etcd` Raft + `JoinConfiguration v1beta4` `controlPlane.certificateKey`):** **100% thành công** (3/3 Control Plane `Ready`, `kubectl` truy cập trực tiếp qua VIP `:6443`; đã xử lý `--ignore-preflight-errors=Mem` cho Secondary CP RAM 2GB và dọn địa chỉ `VIP/32` tồn dư khi chạy `vkube reset`).
   - Hoàn thiện đợt **Hardening bảo mật & độ tin cậy** từ cross-review (SSH TOFU `known_hosts` + `ssh-agent` + passphrase, Online SHA256 verify trên node, bỏ `/tmp` dùng `~/.vkube-tmp` `0600`, `vkube reset` chỉ xóa chain `KUBE-*/cali-*`, DNS-1123 validation, `VKUBE_SSH_PASSWORD` env, `--node-ip` cho multi-NIC, timing từng giai đoạn và tự in `status` sau `apply`).
-- **Bước tiếp theo (Next Action):** Chọn bắt đầu **v0.2** từ các task trong Phase 6 bên dưới (gợi ý ưu tiên: **Task 12** nâng BOM K8s mới nhất + Kong 3.x, hoặc **Task 13/14** `vkube add-node` & `vkube backup`/`restore` `etcd`).
+- **Bước tiếp theo (Next Action):** Kiểm thử E2E thực tế trên lab 3 VM cho toàn bộ bộ tính năng nhánh `main` (`v1.36.7`, `containerd 2.4.2`, `Cilium eBPF`, `add-node`/`remove-node`, `backup`/`restore`, `certs renew`, `upgrade`), hoàn tất kiểm tra chéo rồi mới gắn tag phát hành chính thức **`v1.36.7-vkube.1`**.
 - **Ghi chú & Ràng buộc cốt lõi:**
   - Deployer viết bằng Pure Go, chạy cross-platform (`linux`/`darwin`/`windows`).
-  - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu 22.04/24.04 LTS.
-  - CNI mặc định cho v0.1: **Calico**.
+  - Target Nodes hỗ trợ multi-arch (`amd64` & `arm64`), Ubuntu >= 22.04 và Rocky/AlmaLinux/RHEL 8–9.
+  - CNI hỗ trợ: **Calico** (mặc định) và **Cilium (eBPF)**.
   - Ngôn ngữ chính cho tài liệu, kế hoạch và báo cáo tiến độ: **Tiếng Việt** (giữ nguyên thuật ngữ kỹ thuật phổ biến).
+
+### Bảng Trạng Thái Thực Tế (Single Source of Truth)
+
+| Nhóm tính năng | Trạng thái | Ghi chú kiểm chứng |
+| :--- | :--- | :--- |
+| Core Installer (`apply`/`status`/`reset`, Offline & Online, `kube-vip` 3-CP HA, Calico, 4 Core Addons) | **Released & Tested E2E** | Đã phát hành tag **`v1.32.2-vkube.1`**, đo E2E thật trên 3 VM ARM64 (`2m04s` / `2m29s` / `2m43s` / 3-CP HA). |
+| BOM `v1.36.7` + `containerd 2.4.2` + `Kong v3.5` + `Cilium v1.20.5` | **Implemented (Chờ E2E)** | Đã pass toàn bộ `go vet`, `go test -race` và cross-compile 6 nền tảng trên `main`. |
+| Day-2 (`add-node`/`remove-node`, `backup`/`restore` Local/S3/SFTP + retention/schedule, `certs`, `addons apply`, `upgrade`) | **Implemented (Chờ E2E)** | Đã pass unit test + safety guards (chống sai cluster identity khi restore, chống mất quorum); chờ test E2E trước khi tag. |
+| Enterprise (SSH Bastion, HTTP Proxy, Multi-NIC `nodeIP`, CIS Hardening, Encryption at Rest, BGP, Rocky/Alma/RHEL 8–9, Packer Golden Image, Cosign + SBOM) | **Implemented (Chờ E2E)** | Đã pass unit test & secret-guard; chờ xác thực E2E trên lab trước khi gắn tag `v1.36.7-vkube.1`. |
+| External `etcd` tách rời & Dual-stack IPv4/IPv6 | **Planned (Hậu v1.0)** | Kiến trúc mở sẵn sàng bổ sung không cần viết lại core engine. |
 
 ---
 

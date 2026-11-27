@@ -40,15 +40,16 @@
 
 ---
 
-## Tốc độ triển khai thực tế (Lab Benchmark)
+## Tốc độ triển khai thực tế (Lab Benchmark — bản đã phát hành `v1.32.2-vkube.1`)
 
-_Đo trực tiếp trên cụm lab VMware Fusion ARM64 (Ubuntu 26.10, 2 vCPU / 2 GB RAM / node, LAN 1Gbps). Các tính năng vòng đời Day-2 (`upgrade`, `add-node`, `etcd backup/restore`) nằm trong lộ trình v0.2–v0.5._
+_Đo trực tiếp trên cụm lab VMware Fusion ARM64 (Ubuntu 26.10, 2 vCPU / 2 GB RAM / node, LAN 1Gbps) với bản release đã kiểm thử E2E **`v1.32.2-vkube.1`**. Các tính năng v0.2 → v1.0 (BOM `v1.36.7`, Day-2 `add-node`/`backup`/`certs`/`upgrade`, Cilium, Bastion, CIS, Packer) đã hoàn thiện mã nguồn & unit test trên nhánh `main` và đang chờ kiểm thử E2E trước khi gắn tag `v1.36.7-vkube.1` — xem bảng trạng thái chi tiết tại [docs/PLAN.md](docs/PLAN.md)._
 
 | Quy mô cụm                                                         | Chế độ           | Thời gian `vkube apply`               |
 | :----------------------------------------------------------------- | :--------------- | :------------------------------------ |
 | **2 nodes** (1 CP + 1 Worker, K8s `v1.32.2` + Calico)              | Offline Bundle   | **2 phút 4 giây** _(đã đo thực tế)_   |
 | **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Offline Bundle   | **2 phút 29 giây** _(đã đo thực tế)_  |
 | **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Online trực tiếp | **2 phút 43 giây** _(đã đo thực tế)_  |
+| **3 Control Plane HA** (`kube-vip` VIP + 3× `etcd` Raft)           | Online trực tiếp | **Đã xác thực E2E 3/3 Ready**         |
 
 ---
 

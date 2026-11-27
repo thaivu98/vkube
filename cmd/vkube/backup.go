@@ -186,11 +186,12 @@ func newBackupScheduleCmd() *cobra.Command {
 
 func newRestoreCmd() *cobra.Command {
 	var (
-		configFile      string
-		backupPath      string
-		yes             bool
-		insecureHostKey bool
-		storageFlags    backupStorageFlags
+		configFile           string
+		backupPath           string
+		yes                  bool
+		forceClusterMismatch bool
+		insecureHostKey      bool
+		storageFlags         backupStorageFlags
 	)
 
 	cmd := &cobra.Command{
@@ -218,7 +219,8 @@ func newRestoreCmd() *cobra.Command {
 			}
 			eng := engine.NewEngine(cmd.OutOrStdout())
 			return eng.Restore(cmd.Context(), cfg, engine.RestoreOptions{
-				BackupPath: backupPath,
+				BackupPath:           backupPath,
+				ForceClusterMismatch: forceClusterMismatch,
 			})
 		},
 	}
@@ -226,6 +228,7 @@ func newRestoreCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "Đường dẫn tới file cluster.yaml (bắt buộc)")
 	cmd.Flags().StringVar(&backupPath, "backup", "", "Đường dẫn hoặc URI backup (file cục bộ, s3://bucket/key, hoặc sftp:///path/file.tar.gz) (bắt buộc)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Xác nhận thực thi khôi phục cụm")
+	cmd.Flags().BoolVar(&forceClusterMismatch, "force-cluster-mismatch", false, "Cho phép khôi phục ngay cả khi tên cụm trong backup khác cluster.yaml")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts")
 	storageFlags.bind(cmd, false)
 	return cmd

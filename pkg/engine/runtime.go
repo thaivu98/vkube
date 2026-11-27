@@ -30,14 +30,22 @@ func (e *Engine) RunRuntimeAndArtifacts(ctx context.Context, state *ClusterState
 	return e.runRuntimeNodes(ctx, state, state.Config.Spec.Nodes)
 }
 
+// isGoldenImageMatched chỉ cho phép bỏ qua bước tải/nạp artifact khi Golden Image khớp CHẶT CHẼ
+// cả RELEASE_TAG lẫn kiến trúc CPU (tuyệt đối không bỏ qua mù quáng nếu file marker trống hoặc lệch phiên bản).
 func isGoldenImageMatched(facts *api.NodeFacts, expectedTag string) bool {
 	if facts == nil || !facts.HasGoldenImage {
 		return false
 	}
-	if facts.GoldenImageTag == "" || expectedTag == "" {
-		return true
+	if strings.TrimSpace(facts.GoldenImageTag) == "" || strings.TrimSpace(expectedTag) == "" {
+		return false
 	}
-	return facts.GoldenImageTag == expectedTag
+	if facts.GoldenImageTag != expectedTag {
+		return false
+	}
+	if facts.GoldenImageArch != "" && facts.Arch != "" && facts.GoldenImageArch != facts.Arch {
+		return false
+	}
+	return true
 }
 
 func (e *Engine) applyGoldenImageNode(ctx context.Context, state *ClusterState, node api.NodeConfig, r ssh.Runner) error {
@@ -47,7 +55,7 @@ mkdir -p /etc/systemd/system/kubelet.service.d
 %s
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs))
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.EffectiveNodeIP(), state.Config.Spec.ControlPlane.KubeletExtraArgs))
 	if _, err := r.RunSudo(ctx, cmd); err != nil {
 		return fmt.Errorf("golden-image fast-path setup: %w", err)
 	}
@@ -235,7 +243,7 @@ rm -rf %s
 			remoteWorkDir, remoteWorkDir,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir,
 			remoteWorkDir, remoteWorkDir, remoteImageDir,
-			kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs),
+			kubeletExtraArgsCmd(node.EffectiveNodeIP(), state.Config.Spec.ControlPlane.KubeletExtraArgs),
 			containerdConfigPatchCmd(sandboxImage),
 			remoteImageDir,
 			remoteWorkDir,
@@ -497,7 +505,7 @@ rm -rf "$STAGE_TMP"
 
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs), containerdConfigPatchCmd(sandboxImage)))
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.EffectiveNodeIP(), state.Config.Spec.ControlPlane.KubeletExtraArgs), containerdConfigPatchCmd(sandboxImage)))
 
 		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries, verify SHA256 & cài containerd/kubelet...\n", node.Name)
 		if _, err := r.RunSudo(ctx, strings.Join(dlCmds, "\n")); err != nil {

@@ -20,6 +20,7 @@ func newAddonsCmd() *cobra.Command {
 func newAddonsApplyCmd() *cobra.Command {
 	var (
 		configFile      string
+		bundleFile      string
 		manifestPath    string
 		insecureHostKey bool
 	)
@@ -38,11 +39,13 @@ func newAddonsApplyCmd() *cobra.Command {
 				cfg.Spec.SSH.InsecureIgnoreHostKey = true
 			}
 			return engine.NewEngine(cmd.OutOrStdout()).ApplyAddons(cmd.Context(), cfg, engine.ApplyAddonsOptions{
+				BundlePath:   bundleFile,
 				ManifestPath: manifestPath,
 			})
 		},
 	}
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "Đường dẫn tới file cluster.yaml (bắt buộc)")
+	cmd.Flags().StringVarP(&bundleFile, "bundle", "b", "", "Đường dẫn tới Offline Bundle (.tar.zst) cho môi trường Air-gapped (0 byte ra Internet)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Đường dẫn file BOM (versions.yaml) tùy chỉnh")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts")
 	return cmd

@@ -16,6 +16,10 @@ if [ ! -f "$BUNDLE_PATH" ]; then
   echo "ERROR: không tìm thấy Offline Bundle tại $BUNDLE_PATH" >&2
   exit 1
 fi
+if [ -d /etc/kubernetes/pki ] || [ -f /etc/kubernetes/admin.conf ]; then
+  echo "ERROR: máy nguồn đã tồn tại chứng chỉ Kubernetes (/etc/kubernetes/pki) — không được bake Golden Image từ node bẩn!" >&2
+  exit 1
+fi
 
 echo "==> [1/4] OS Tuning (swap, kernel modules, sysctl, SELinux)..."
 swapoff -a || true
@@ -135,18 +139,43 @@ if [ -d "$WORK_DIR/images" ]; then
     rm -f "$img_tar"
   done
 fi
+echo "==> [4/4] Ghi marker /etc/vkube-golden-image & cấu hình tự tái tạo định danh (machine-id, SSH host key) khi clone..."
+ARCH_RAW="$(uname -m)"
+ARCH_NORM="amd64"
+if [ "$ARCH_RAW" = "aarch64" ] || [ "$ARCH_RAW" = "arm64" ]; then ARCH_NORM="arm64"; fi
+BOM_SHA=""
+if [ -f "$WORK_DIR/bundle-manifest.json" ]; then
+  BOM_SHA="$(sha256sum "$WORK_DIR/bundle-manifest.json" | awk '{print $1}')"
+fi
 rm -rf "$WORK_DIR"
 
-echo "==> [4/4] Ghi marker /etc/vkube-golden-image & dọn sạch máy trước khi đóng gói..."
 cat <<EOF > /etc/vkube-golden-image
 RELEASE_TAG=${RELEASE_TAG}
+ARCH=${ARCH_NORM}
+BOM_SHA256=${BOM_SHA}
 BAKED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
-# Xóa machine-id & SSH host keys để mỗi VM clone ra có định danh mạng và khóa SSH duy nhất
+# Đảm bảo mỗi VM clone ra tự tái tạo machine-id và SSH host keys mới ngay lần boot đầu tiên (kể cả khi không dùng cloud-init)
+cat <<'EOF' > /etc/systemd/system/vkube-firstboot-identity.service
+[Unit]
+Description=Regenerate machine-id and SSH host keys on first boot of cloned Golden Image
+Before=ssh.service sshd.service
+ConditionFirstBoot=no
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '[ -s /etc/machine-id ] || systemd-machine-id-setup; ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1 || ssh-keygen -A'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable vkube-firstboot-identity.service >/dev/null 2>&1 || true
+
 truncate -s 0 /etc/machine-id || true
 rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_* || true
 if command -v cloud-init >/dev/null 2>&1; then
   cloud-init clean --logs || true
 fi
-echo "Golden Image ${RELEASE_TAG} baked successfully!"
+echo "Golden Image ${RELEASE_TAG} (${ARCH_NORM}) baked successfully!"

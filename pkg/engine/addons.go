@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thaivu98/vkube/pkg/api"
+	"github.com/thaivu98/vkube/pkg/bundle"
 	"github.com/thaivu98/vkube/pkg/ssh"
 	"github.com/thaivu98/vkube/pkg/templates"
 	"github.com/thaivu98/vkube/pkg/versions"
@@ -17,16 +18,31 @@ import (
 
 // ApplyAddonsOptions chứa tham số cho lệnh `vkube addons apply`.
 type ApplyAddonsOptions struct {
+	BundlePath   string // Nếu có -> Air-gapped (không gọi curl ra Internet)
 	ManifestPath string
 }
 
 // ApplyAddons đồng bộ lại Core Addons, customManifests, Labels/Taints, Proxy và Private Registry Mirrors
-// lên một cụm Kubernetes đang vận hành mà không cần dựng lại cụm.
+// lên một cụm Kubernetes đang vận hành mà không cần dựng lại cụm (hỗ trợ cả Online và Air-gapped --bundle).
 func (e *Engine) ApplyAddons(ctx context.Context, cfg *api.ClusterConfig, opts ApplyAddonsOptions) error {
 	start := time.Now()
-	bom, err := versions.Load(opts.ManifestPath)
-	if err != nil {
-		return fmt.Errorf("load BOM manifest: %w", err)
+	onlineMode := strings.TrimSpace(opts.BundlePath) == ""
+
+	var (
+		manifest *api.BundleManifest
+		bom      *versions.BOM
+		err      error
+	)
+	if onlineMode {
+		bom, err = versions.Load(opts.ManifestPath)
+		if err != nil {
+			return fmt.Errorf("load BOM manifest: %w", err)
+		}
+	} else {
+		manifest, err = bundle.Verify(opts.BundlePath)
+		if err != nil {
+			return fmt.Errorf("verify offline bundle: %w", err)
+		}
 	}
 
 	pool, err := ssh.ConnectAll(ctx, cfg, e.Out)
@@ -41,53 +57,73 @@ func (e *Engine) ApplyAddons(ctx context.Context, cfg *api.ClusterConfig, opts A
 		return err
 	}
 
-	// Phát hiện kiến trúc của CP-1 để resolve BOM & đảm bảo manifest addon có sẵn trên CP-1
-	res, err := cp1Runner.RunSudo(ctx, "uname -m")
-	if err != nil {
-		return fmt.Errorf("detect arch on %s: %w", cp1.Name, err)
-	}
-	arch, err := normalizeLinuxArch(res.Stdout)
-	if err != nil {
-		return err
-	}
-	resolved, err := bom.Resolve(arch)
-	if err != nil {
-		return err
-	}
-
-	// Tải bổ sung các manifest addon chưa có trong /etc/vkube/manifests (kèm verify SHA256 ghim trong BOM)
-	var fetchCmds []string
-	fetchCmds = append(fetchCmds, "set -euo pipefail")
-	if pe := proxyShellExports(cfg); pe != "" {
-		fetchCmds = append(fetchCmds, pe)
-	}
-	fetchCmds = append(fetchCmds, fmt.Sprintf("mkdir -p %s", remoteManifestDir))
-	for _, art := range resolved.Artifacts {
-		if art.Type != versions.ArtifactTypeManifest {
-			continue
+	var resolved *versions.ResolvedBOM
+	if onlineMode {
+		res, err := cp1Runner.RunSudo(ctx, "uname -m")
+		if err != nil {
+			return fmt.Errorf("detect arch on %s: %w", cp1.Name, err)
 		}
-		destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
-		fetchCmds = append(fetchCmds, fmt.Sprintf(`if [ ! -f %q ]; then
-  curl -fsSL %q -o %q
-  echo "%s  %s" | sha256sum -c - >/dev/null
-fi`, destPath, art.URL, destPath, art.SHA256, destPath))
-	}
-	if _, err := cp1Runner.RunSudo(ctx, strings.Join(fetchCmds, "\n")); err != nil {
-		return fmt.Errorf("ensure addon manifests on %s: %w", cp1.Name, err)
-	}
-
-	state := &ClusterState{
-		Config:      cfg,
-		OnlineMode:  true,
-		ResolvedBOM: resolved,
-		BundleManifest: &api.BundleManifest{
+		arch, err := normalizeLinuxArch(res.Stdout)
+		if err != nil {
+			return err
+		}
+		resolved, err = bom.Resolve(arch)
+		if err != nil {
+			return err
+		}
+		manifest = &api.BundleManifest{
 			ReleaseTag:        resolved.ReleaseTag,
 			KubernetesVersion: resolved.KubernetesVersion,
 			Arch:              resolved.Arch,
 			Components:        resolved.Components,
-		},
-		Pool:  pool,
-		Facts: make(map[string]*api.NodeFacts),
+		}
+
+		// Tải bổ sung các manifest addon chưa có trong /etc/vkube/manifests (kèm verify SHA256 ghim trong BOM)
+		var fetchCmds []string
+		fetchCmds = append(fetchCmds, "set -euo pipefail")
+		if pe := proxyShellExports(cfg); pe != "" {
+			fetchCmds = append(fetchCmds, pe)
+		}
+		fetchCmds = append(fetchCmds, fmt.Sprintf("mkdir -p %s", remoteManifestDir))
+		for _, art := range resolved.Artifacts {
+			if art.Type != versions.ArtifactTypeManifest {
+				continue
+			}
+			destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
+			fetchCmds = append(fetchCmds, fmt.Sprintf(`if [ ! -f %q ]; then
+  curl -fsSL %q -o %q
+  echo "%s  %s" | sha256sum -c - >/dev/null
+fi`, destPath, art.URL, destPath, art.SHA256, destPath))
+		}
+		if _, err := cp1Runner.RunSudo(ctx, strings.Join(fetchCmds, "\n")); err != nil {
+			return fmt.Errorf("ensure addon manifests on %s: %w", cp1.Name, err)
+		}
+	} else {
+		// Chế độ Air-gapped: trích xuất manifests trực tiếp từ Offline Bundle lên CP-1 (0 byte tải từ Internet)
+		remoteArchive := "/var/tmp/vkube-addons-bundle.tar.zst"
+		if err := cp1Runner.UploadFile(ctx, opts.BundlePath, remoteArchive); err != nil {
+			return fmt.Errorf("upload bundle to %s: %w", cp1.Name, err)
+		}
+		extractCmd := fmt.Sprintf(`set -euo pipefail
+ADIR="/var/lib/vkube/addons-staging"
+rm -rf "$ADIR" && mkdir -p -m 0700 "$ADIR" %s
+trap 'rm -rf "$ADIR" %s' EXIT
+tar --zstd -xf %s -C "$ADIR"
+if [ -d "$ADIR/manifests" ]; then
+  cp -f "$ADIR/manifests/"* %s/
+fi`, remoteManifestDir, remoteArchive, remoteArchive, remoteManifestDir)
+		if _, err := cp1Runner.RunSudo(ctx, extractCmd); err != nil {
+			return fmt.Errorf("extract offline addon manifests on %s: %w", cp1.Name, err)
+		}
+	}
+
+	state := &ClusterState{
+		Config:         cfg,
+		OnlineMode:     onlineMode,
+		ResolvedBOM:    resolved,
+		BundleManifest: manifest,
+		Pool:           pool,
+		Facts:          make(map[string]*api.NodeFacts),
 	}
 
 	if err := e.runAddons(ctx, state); err != nil {

@@ -248,13 +248,16 @@ func (c *ClusterConfig) Validate() error {
 		switch n.Role {
 		case RoleControlPlane:
 			cpCount++
-			// kubeadm init (advertiseAddress) và join --control-plane bắt buộc host của Control Plane là địa chỉ IP.
-			if strings.TrimSpace(n.Host) != "" && net.ParseIP(strings.TrimSpace(n.Host)) == nil {
-				errs = append(errs, fmt.Sprintf("%s.host %q must be a valid IP address for control-plane nodes (kubeadm advertiseAddress requires an IP)", prefix, n.Host))
+			// kubeadm init (advertiseAddress) và join --control-plane bắt buộc IP cụm (nodeIP hoặc host) là địa chỉ IP hợp lệ.
+			if effIP := n.EffectiveNodeIP(); effIP != "" && net.ParseIP(effIP) == nil {
+				errs = append(errs, fmt.Sprintf("%s.host %q must be a valid IP address for control-plane nodes (or set nodeIP to a valid IP for Multi-NIC)", prefix, n.Host))
 			}
 		case RoleWorker:
 		default:
 			errs = append(errs, fmt.Sprintf("%s.role %q must be %q or %q", prefix, n.Role, RoleControlPlane, RoleWorker))
+		}
+		if strings.TrimSpace(n.NodeIP) != "" && net.ParseIP(strings.TrimSpace(n.NodeIP)) == nil {
+			errs = append(errs, fmt.Sprintf("%s.nodeIP %q must be a valid IP address", prefix, n.NodeIP))
 		}
 
 		effSSH := c.EffectiveSSH(n)
@@ -445,6 +448,14 @@ func (c *ClusterConfig) ControlPlanes() []NodeConfig {
 		}
 	}
 	return out
+}
+
+// EffectiveNodeIP trả về địa chỉ IP mạng cluster nội bộ của node (ưu tiên nodeIP cho Multi-NIC, fallback về host).
+func (n NodeConfig) EffectiveNodeIP() string {
+	if s := strings.TrimSpace(n.NodeIP); s != "" {
+		return s
+	}
+	return strings.TrimSpace(n.Host)
 }
 
 // Workers trả về danh sách các node có vai trò worker.

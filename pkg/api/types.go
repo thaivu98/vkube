@@ -257,7 +257,8 @@ type Taint struct {
 // NodeConfig đại diện cho một Target Node Linux.
 type NodeConfig struct {
 	Name           string            `yaml:"name" json:"name"`
-	Host           string            `yaml:"host" json:"host"`
+	Host           string            `yaml:"host" json:"host"`                         // IP hoặc DNS quản trị để SSH
+	NodeIP         string            `yaml:"nodeIP,omitempty" json:"nodeIP,omitempty"` // Tùy chọn cho Multi-NIC: IP mạng cluster nội bộ (--node-ip, advertiseAddress, etcd); bỏ trống sẽ dùng Host
 	Role           string            `yaml:"role" json:"role"`
 	User           string            `yaml:"user,omitempty" json:"user,omitempty"`
 	Port           int               `yaml:"port,omitempty" json:"port,omitempty"`
@@ -299,8 +300,11 @@ type NodeFacts struct {
 	DefaultInterface string `json:"defaultInterface"` // card mạng default route (dùng cho kube-vip)
 	CPUCores         int    `json:"cpuCores"`
 	MemoryMB         int    `json:"memoryMB"`
-	HasZstd          bool   `json:"hasZstd"`        // kiểm tra có sẵn zstd trên node hay không
-	HasGoldenImage   bool   `json:"hasGoldenImage"` // nhận diện Golden Image (Packer) để bỏ qua tải/nạp artifact
-	GoldenImageTag   string `json:"goldenImageTag"` // releaseTag đã bake vào /etc/vkube-golden-image (nếu có)
-	NTPSynced        bool   `json:"ntpSynced"`      // kiểm tra đồng bộ thời gian NTP/chrony/systemd-timesyncd
+	HasZstd          bool   `json:"hasZstd"`           // kiểm tra có sẵn zstd trên node hay không
+	HasGoldenImage   bool   `json:"hasGoldenImage"`    // nhận diện Golden Image (Packer) để bỏ qua tải/nạp artifact
+	GoldenImageTag   string `json:"goldenImageTag"`    // releaseTag đã bake vào /etc/vkube-golden-image
+	GoldenImageArch  string `json:"goldenImageArch"`   // kiến trúc đã bake vào /etc/vkube-golden-image
+	GoldenImageBOM   string `json:"goldenImageBomSha"` // SHA256 của bundle-manifest.json đã bake vào Golden Image
+	MachineID        string `json:"machineId"`         // /etc/machine-id để phát hiện trùng định danh khi clone VM
+	NTPSynced        bool   `json:"ntpSynced"`         // kiểm tra đồng bộ thời gian NTP/chrony/systemd-timesyncd
 }

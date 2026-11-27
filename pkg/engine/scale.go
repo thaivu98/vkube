@@ -305,9 +305,13 @@ func (e *Engine) RemoveNode(ctx context.Context, cfg *api.ClusterConfig, opts Re
 		return fmt.Errorf("drain node %s: %w", targetName, err)
 	}
 
-	// 2. Nếu là Control Plane, gỡ etcd member ra khỏi Raft quorum trước khi xóa node
+	// 2. Nếu là Control Plane, kiểm tra tác động quorum & gỡ etcd member ra khỏi Raft quorum trước khi xóa node
 	isCP := targetNode != nil && targetNode.Role == api.RoleControlPlane
 	if isCP {
+		remainingCPs := len(cfg.ControlPlanes()) - 1
+		if remainingCPs > 0 && remainingCPs%2 == 0 {
+			fmt.Fprintf(e.Out, "  [WARN]      Sau khi gỡ %s, cụm chỉ còn %d Control Plane (số chẵn) — nên bổ sung CP thay thế để đảm bảo etcd Raft quorum.\n", targetName, remainingCPs)
+		}
 		fmt.Fprintf(e.Out, "  [etcd]      Kiểm tra & gỡ etcd member của %s khỏi Raft quorum...\n", targetName)
 		listCmd := fmt.Sprintf(`/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member list`, activeCP.Name)
 		listRes, err := cpClient.RunSudo(ctx, listCmd)

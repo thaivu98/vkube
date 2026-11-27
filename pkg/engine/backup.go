@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,7 +27,8 @@ type BackupOptions struct {
 
 // RestoreOptions chứa tham số cho lệnh `vkube restore`.
 type RestoreOptions struct {
-	BackupPath string // Đường dẫn file backup .tar.gz trên máy Deployer
+	BackupPath           string // Đường dẫn file backup .tar.gz trên máy Deployer hoặc URI s3:// / sftp://
+	ForceClusterMismatch bool   // Cho phép khôi phục ngay cả khi tên cụm trong backup-metadata.json khác cluster.yaml
 }
 
 // Backup chụp snapshot etcd (kèm verify bằng etcdutl/etcdctl snapshot status), đóng gói cùng
@@ -249,8 +251,8 @@ func (e *Engine) Restore(ctx context.Context, cfg *api.ClusterConfig, opts Resto
 		}
 	}
 
-	fmt.Fprintf(e.Out, "==> Kiểm tra tính hợp lệ của bản sao lưu %s...\n", backupRef)
-	if err := verifyBackupArchive(localBackup); err != nil {
+	fmt.Fprintf(e.Out, "==> Kiểm tra tính hợp lệ & cluster identity của bản sao lưu %s...\n", backupRef)
+	if err := verifyBackupArchive(localBackup, cfg.Metadata.Name, opts.ForceClusterMismatch); err != nil {
 		return fmt.Errorf("invalid backup archive: %w", err)
 	}
 	opts.BackupPath = localBackup
@@ -400,13 +402,20 @@ exit 1`
 func buildEtcdInitialCluster(cps []api.NodeConfig) string {
 	peers := make([]string, 0, len(cps))
 	for _, cp := range cps {
-		peers = append(peers, fmt.Sprintf("%s=https://%s:2380", cp.Name, cp.Host))
+		peers = append(peers, fmt.Sprintf("%s=https://%s:2380", cp.Name, cp.EffectiveNodeIP()))
 	}
 	return strings.Join(peers, ",")
 }
 
-// verifyBackupArchive kiểm tra file .tar.gz bằng Pure Go đảm bảo chứa đủ etcd-snapshot.db và thư mục pki/.
-func verifyBackupArchive(localPath string) error {
+type backupMetadata struct {
+	Cluster      string `json:"cluster"`
+	ControlPlane string `json:"controlPlane"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+// verifyBackupArchive kiểm tra file .tar.gz bằng Pure Go đảm bảo chứa đủ etcd-snapshot.db, thư mục pki/,
+// và đối chiếu cluster identity trong backup-metadata.json để chống khôi phục nhầm snapshot của cụm khác.
+func verifyBackupArchive(localPath, expectedCluster string, forceClusterMismatch bool) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -420,7 +429,12 @@ func verifyBackupArchive(localPath string) error {
 	defer gr.Close()
 
 	tr := tar.NewReader(gr)
-	var hasSnapshot, hasPKI bool
+	var (
+		hasSnapshot bool
+		hasPKI      bool
+		meta        backupMetadata
+		hasMeta     bool
+	)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -436,12 +450,22 @@ func verifyBackupArchive(localPath string) error {
 		if strings.HasPrefix(clean, "pki/") && hdr.Typeflag == tar.TypeReg {
 			hasPKI = true
 		}
+		if clean == "backup-metadata.json" && hdr.Size > 0 && hdr.Size < 64*1024 {
+			if raw, rerr := io.ReadAll(tr); rerr == nil {
+				if jerr := json.Unmarshal(raw, &meta); jerr == nil {
+					hasMeta = true
+				}
+			}
+		}
 	}
 	if !hasSnapshot {
 		return fmt.Errorf("archive missing non-empty etcd-snapshot.db")
 	}
 	if !hasPKI {
 		return fmt.Errorf("archive missing pki/ certificates")
+	}
+	if hasMeta && expectedCluster != "" && meta.Cluster != "" && meta.Cluster != expectedCluster && !forceClusterMismatch {
+		return fmt.Errorf("backup belongs to cluster %q, but target cluster.yaml is %q (pass --force-cluster-mismatch to override)", meta.Cluster, expectedCluster)
 	}
 	return nil
 }

@@ -31,9 +31,17 @@ HAS_ZSTD="0"
 if command -v zstd >/dev/null 2>&1; then HAS_ZSTD="1"; fi
 GOLDEN="0"
 GOLDEN_TAG=""
+GOLDEN_ARCH=""
+GOLDEN_BOM=""
 if [ -f /etc/vkube-golden-image ]; then
   GOLDEN="1"
   GOLDEN_TAG="$(awk -F= '/^RELEASE_TAG=/ {print $2; exit}' /etc/vkube-golden-image 2>/dev/null || true)"
+  GOLDEN_ARCH="$(awk -F= '/^ARCH=/ {print $2; exit}' /etc/vkube-golden-image 2>/dev/null || true)"
+  GOLDEN_BOM="$(awk -F= '/^BOM_SHA256=/ {print $2; exit}' /etc/vkube-golden-image 2>/dev/null || true)"
+fi
+MACHINE_ID=""
+if [ -f /etc/machine-id ]; then
+  MACHINE_ID="$(tr -d '[:space:]' < /etc/machine-id 2>/dev/null || true)"
 fi
 NTP_SYNC="0"
 if command -v timedatectl >/dev/null 2>&1 && [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo no)" = "yes" ]; then
@@ -41,8 +49,8 @@ if command -v timedatectl >/dev/null 2>&1 && [ "$(timedatectl show -p NTPSynchro
 elif command -v chronyc >/dev/null 2>&1 && chronyc tracking >/dev/null 2>&1; then
   NTP_SYNC="1"
 fi
-printf "OS_ID=%s\nOS_VER=%s\nARCH=%s\nKERNEL=%s\nHOSTNAME=%s\nIFACE=%s\nCPUS=%s\nMEM_MB=%s\nHAS_ZSTD=%s\nGOLDEN=%s\nGOLDEN_TAG=%s\nNTP_SYNC=%s\n" \
-  "$OS_ID" "$OS_VER" "$ARCH" "$KERNEL" "$HNAME" "$IFACE" "$CPUS" "$((MEM_KB / 1024))" "$HAS_ZSTD" "$GOLDEN" "$GOLDEN_TAG" "$NTP_SYNC"
+printf "OS_ID=%s\nOS_VER=%s\nARCH=%s\nKERNEL=%s\nHOSTNAME=%s\nIFACE=%s\nCPUS=%s\nMEM_MB=%s\nHAS_ZSTD=%s\nGOLDEN=%s\nGOLDEN_TAG=%s\nGOLDEN_ARCH=%s\nGOLDEN_BOM=%s\nMACHINE_ID=%s\nNTP_SYNC=%s\n" \
+  "$OS_ID" "$OS_VER" "$ARCH" "$KERNEL" "$HNAME" "$IFACE" "$CPUS" "$((MEM_KB / 1024))" "$HAS_ZSTD" "$GOLDEN" "$GOLDEN_TAG" "$GOLDEN_ARCH" "$GOLDEN_BOM" "$MACHINE_ID" "$NTP_SYNC"
 `
 
 // RunPreflight thu thập NodeFacts đúng 1 lần song song trên toàn bộ nodes, lưu vào state.Facts
@@ -87,8 +95,9 @@ func (e *Engine) runPreflightNodes(ctx context.Context, state *ClusterState, nod
 		return err
 	}
 
-	// Đảm bảo toàn bộ các node trong cụm có cùng kiến trúc CPU (chống lẫn amd64/arm64 ở chế độ Online).
+	// Đảm bảo toàn bộ các node trong cụm có cùng kiến trúc CPU và KHÔNG dùng chung /etc/machine-id (lỗi phổ biến khi clone VM/Golden Image).
 	var expectedArch string
+	seenMachineIDs := make(map[string]string, len(nodes))
 	for _, n := range nodes {
 		f := state.Facts[n.Name]
 		if f == nil {
@@ -96,10 +105,14 @@ func (e *Engine) runPreflightNodes(ctx context.Context, state *ClusterState, nod
 		}
 		if expectedArch == "" {
 			expectedArch = f.Arch
-			continue
-		}
-		if f.Arch != expectedArch {
+		} else if f.Arch != expectedArch {
 			return fmt.Errorf("mixed CPU architectures detected: node %q is %s while cluster expects %s", n.Name, f.Arch, expectedArch)
+		}
+		if f.MachineID != "" {
+			if prevNode, dup := seenMachineIDs[f.MachineID]; dup {
+				return fmt.Errorf("duplicate /etc/machine-id (%s) detected on nodes %q and %q (cloned VM without regenerating machine-id; run 'sudo truncate -s 0 /etc/machine-id && sudo systemd-machine-id-setup' on each clone)", f.MachineID, prevNode, n.Name)
+			}
+			seenMachineIDs[f.MachineID] = n.Name
 		}
 	}
 
@@ -213,6 +226,9 @@ func parseNodeFacts(nodeName, host, output string) (*api.NodeFacts, error) {
 		HasZstd:          kv["HAS_ZSTD"] == "1",
 		HasGoldenImage:   kv["GOLDEN"] == "1",
 		GoldenImageTag:   kv["GOLDEN_TAG"],
+		GoldenImageArch:  kv["GOLDEN_ARCH"],
+		GoldenImageBOM:   kv["GOLDEN_BOM"],
+		MachineID:        kv["MACHINE_ID"],
 		NTPSynced:        kv["NTP_SYNC"] == "1",
 	}, nil
 }

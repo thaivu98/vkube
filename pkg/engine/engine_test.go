@@ -272,12 +272,19 @@ func TestBackupAndRestoreHelpers(t *testing.T) {
 	}
 	writeEntry("etcd-snapshot.db", "fake-etcd-db-bytes")
 	writeEntry("pki/ca.crt", "fake-cert")
+	writeEntry("backup-metadata.json", `{"cluster":"prod-ha","controlPlane":"cp-1"}`)
 	_ = tw.Close()
 	_ = gw.Close()
 	_ = f.Close()
 
-	if err := verifyBackupArchive(archivePath); err != nil {
-		t.Fatalf("expected valid backup archive, got error: %v", err)
+	if err := verifyBackupArchive(archivePath, "prod-ha", false); err != nil {
+		t.Fatalf("expected valid backup archive for matching cluster, got error: %v", err)
+	}
+	if err := verifyBackupArchive(archivePath, "staging", false); err == nil || !strings.Contains(err.Error(), "backup belongs to cluster") {
+		t.Fatalf("expected cluster mismatch error, got: %v", err)
+	}
+	if err := verifyBackupArchive(archivePath, "staging", true); err != nil {
+		t.Fatalf("expected forceClusterMismatch to allow restore, got: %v", err)
 	}
 }
 
@@ -475,15 +482,48 @@ func TestPhase7Helpers_ProxyRetentionAndBGP(t *testing.T) {
 }
 
 func TestPhase8And9Helpers_GoldenImageAndUpgradePath(t *testing.T) {
-	// 1. Golden Image tag matching
-	if !isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: "v1.36.7-vkube.1"}, "v1.36.7-vkube.1") {
-		t.Error("expected exact golden image tag match")
+	// 1. Golden Image strict tag + arch matching (không bao giờ bỏ qua mù quáng khi thiếu tag hoặc lệch arch)
+	if !isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, Arch: api.ArchARM64, GoldenImageTag: "v1.36.7-vkube.1", GoldenImageArch: api.ArchARM64}, "v1.36.7-vkube.1") {
+		t.Error("expected exact golden image tag+arch match")
 	}
-	if !isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: ""}, "v1.36.7-vkube.1") {
-		t.Error("expected untagged golden image match")
+	if isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, Arch: api.ArchARM64, GoldenImageTag: ""}, "v1.36.7-vkube.1") {
+		t.Error("expected untagged golden image to be REJECTED (fail-closed)")
 	}
-	if isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, GoldenImageTag: "v1.32.2-vkube.1"}, "v1.36.7-vkube.1") {
+	if isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, Arch: api.ArchARM64, GoldenImageTag: "v1.36.7-vkube.1", GoldenImageArch: api.ArchAMD64}, "v1.36.7-vkube.1") {
+		t.Error("expected mismatched golden image arch to be REJECTED")
+	}
+	if isGoldenImageMatched(&api.NodeFacts{HasGoldenImage: true, Arch: api.ArchARM64, GoldenImageTag: "v1.32.2-vkube.1"}, "v1.36.7-vkube.1") {
 		t.Error("expected mismatched golden image tag to return false")
+	}
+
+	// 2. Duplicate machine-id detection in preflight
+	dupCfg := &api.ClusterConfig{
+		Metadata: api.ClusterMetadata{Name: "dup-mid"},
+		Spec: api.ClusterSpec{
+			Arch: api.ArchAuto,
+			Nodes: []api.NodeConfig{
+				{Name: "cp-1", Host: "10.0.0.1", Role: api.RoleControlPlane},
+				{Name: "worker-1", Host: "10.0.0.2", Role: api.RoleWorker},
+			},
+		},
+	}
+	probeDup := "OS_ID=ubuntu\nOS_VER=24.04\nARCH=aarch64\nKERNEL=6.8.0\nHOSTNAME=n\nIFACE=ens160\nCPUS=2\nMEM_MB=2048\nHAS_ZSTD=1\nGOLDEN=0\nMACHINE_ID=same-cloned-id-123\n"
+	dupPool := ssh.NewPool(map[string]ssh.Runner{
+		"cp-1":     &fakeNodeRunner{name: "cp-1", host: "10.0.0.1", output: probeDup},
+		"worker-1": &fakeNodeRunner{name: "worker-1", host: "10.0.0.2", output: probeDup},
+	}, io.Discard)
+	dupState := &ClusterState{Config: dupCfg, OnlineMode: true, Pool: dupPool, Facts: make(map[string]*api.NodeFacts)}
+	if err := NewEngine(io.Discard).RunPreflight(context.Background(), dupState); err == nil || !strings.Contains(err.Error(), "duplicate /etc/machine-id") {
+		t.Fatalf("expected duplicate machine-id error, got: %v", err)
+	}
+
+	// 3. Multi-NIC nodeIP separation
+	multiNIC := []api.NodeConfig{{Name: "cp-1", Host: "10.10.0.1", NodeIP: "10.20.0.1", Role: api.RoleControlPlane}}
+	if h := buildHostsBlock(multiNIC); !strings.Contains(h, "10.20.0.1 cp-1") {
+		t.Errorf("expected EffectiveNodeIP 10.20.0.1 in hosts block:\n%s", h)
+	}
+	if ic := buildEtcdInitialCluster(multiNIC); ic != "cp-1=https://10.20.0.1:2380" {
+		t.Errorf("expected EffectiveNodeIP in etcd initial cluster, got: %q", ic)
 	}
 
 	// 2. validateUpgradePath

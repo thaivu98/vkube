@@ -190,7 +190,10 @@ rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
 		certSANs = append(certSANs, state.Config.Spec.VIP)
 	}
 	for _, cp := range cps {
-		certSANs = append(certSANs, cp.Host, cp.Name)
+		certSANs = append(certSANs, cp.EffectiveNodeIP(), cp.Name)
+		if cp.Host != cp.EffectiveNodeIP() {
+			certSANs = append(certSANs, cp.Host)
+		}
 	}
 
 	pullPolicy := "Never"
@@ -201,7 +204,7 @@ rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
 	initYAML, err := templates.RenderKubeadmInit(templates.KubeadmInitData{
 		ClusterName:                state.Config.Metadata.Name,
 		KubernetesVersion:          state.BundleManifest.KubernetesVersion,
-		AdvertiseAddress:           cp1.Host,
+		AdvertiseAddress:           cp1.EffectiveNodeIP(),
 		NodeName:                   cp1.Name,
 		ControlPlaneEndpoint:       state.Config.Spec.ControlPlaneEndpoint,
 		PodSubnet:                  state.Config.Spec.Networking.PodSubnet,
@@ -289,7 +292,7 @@ trap 'rm -f /etc/vkube/kubeadm-init.yaml' EXIT
 					NodeName:                 cp.Name,
 					ImagePullPolicy:          pullPolicy,
 					IsControlPlane:           true,
-					AdvertiseAddress:         cp.Host,
+					AdvertiseAddress:         cp.EffectiveNodeIP(),
 					CertificateKey:           certKey,
 				})
 				if err != nil {
