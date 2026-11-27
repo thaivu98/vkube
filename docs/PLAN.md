@@ -2,7 +2,7 @@
 
 ## Current Status / Handover
 - **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v0.2)
-- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 6 (v0.2 — Tasks 12 → 16)** — Sẵn sàng sang **Phase 7 (v0.3 / Task 17 — Golden Image Packer)** hoặc kiểm thử E2E v0.2
+- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 6 (v0.2 — Tasks 12 → 16)** — Chờ kiểm tra chéo bản v0.2, sau đó chuyển sang **Phase 7 (v0.3 — Enterprise Readiness & Day-2 Automation)**
 - **Task đang thực hiện:** Đã hoàn thành toàn bộ Phase 6 (v0.2)
 - **Vừa hoàn thành:**
   - **Task 16 (LAN HTTP Fan-out & Rocky/AlmaLinux/RHEL 8–9):** Nối `ssh.BundleServer` vào `pkg/engine/runtime.go` (cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes, tự fallback SFTP nếu bị firewall chặn); mở rộng `preflight` & `os-prep` hỗ trợ **Rocky Linux / AlmaLinux / RHEL 8–9** (SELinux permissive + mở đúng port K8s/CNI trên `firewalld` nếu đang chạy).
@@ -83,15 +83,23 @@
 
 ---
 
-## Phase 7 (v0.3): Golden Image (Packer) — Dựng cụm trong ~1–1.5 phút
-- [ ] **Task 17 — Packer Templates (VMware & QEMU/Proxmox):** Tạo bộ template Packer bake sẵn OS tuning + binaries + OCI images kèm file đánh dấu `/etc/vkube-golden-image`; nâng cấp `pkg/engine` tự nhận diện `NodeFacts.HasGoldenImage` để bỏ qua bước tải/nạp artifact.
+## Phase 7 (v0.3): Enterprise Readiness & Vận hành Day-2 Nâng cao
+- [ ] **Task 17 — SSH Bastion (Jump Host) & Corporate HTTP Proxy:** Hỗ trợ kết nối SSH xuyên qua Jump Host (`spec.ssh.bastion`, viết bằng Pure Go `golang.org/x/crypto/ssh`) cho cụm trong private subnet; hỗ trợ `spec.proxy` (`httpProxy`, `httpsProxy`, `noProxy`) tự sinh systemd drop-in cho `containerd` và áp dụng cho bước tải Online.
+- [ ] **Task 18 — Quản lý Chứng chỉ (`vkube certs check/renew`) & Backup Retention/Schedule:** Thêm lệnh kiểm tra hạn cert (kèm cảnh báo trong `vkube status`) và gia hạn cert an toàn trên toàn bộ Control Plane (`kubeadm certs renew all` + restart static pods); bổ sung `spec.backup.retention` (giữ N bản mới nhất, tự dọn bản cũ trên Local/S3/SFTP) và tùy chọn lập lịch backup `etcd` định kỳ.
+- [ ] **Task 19 — Quản lý Addons & Reconcile cấu hình cụm đang chạy (`vkube addons apply`):** Cho phép bật/cập nhật thêm Core Addons, `customManifests`, Labels/Taints và Private Registry mirrors trên cụm đang vận hành mà không cần dựng lại từ đầu.
+- [ ] **Task 20 — Tùy biến nâng cao `kube-apiserver`/`kubelet` & BGP Mode:** Hỗ trợ truyền `extraArgs` cho `kube-apiserver` / `kubelet` (tích hợp OIDC/Keycloak, Audit Log, Encryption at Rest cho Secrets trong `etcd`) và bổ sung chế độ **BGP** cho `kube-vip` / MetalLB (hỗ trợ hạ tầng L3 khác VLAN).
 
 ---
 
-## Phase 8 (v0.5): Rolling Upgrade & DevSecOps Hardening
-- [ ] **Task 18 — `vkube upgrade` & Hardening:** Implement rolling upgrade an toàn từng node qua `kubeadm upgrade`, bổ sung kiểm tra đồng bộ giờ (`chrony`/`systemd-timesyncd`) trong `preflight`, tùy chọn `metrics-server` dùng `serverTLSBootstrap` (thay `--kubelet-insecure-tls`) và bộ cấu hình CIS Benchmark cơ bản.
+## Phase 8 (v0.4): Golden Image (Packer) — Dựng cụm trong ~1–1.5 phút
+- [ ] **Task 21 — Packer Templates (VMware & QEMU/Proxmox):** Tạo bộ template Packer bake sẵn OS tuning + binaries + OCI images kèm file đánh dấu `/etc/vkube-golden-image`; nâng cấp `pkg/engine` tự nhận diện `NodeFacts.HasGoldenImage` để bỏ qua bước tải/nạp artifact.
 
 ---
 
-## Phase 9 (v1.0): Production-ready & Supply Chain Security
-- [ ] **Task 19 — Ký Artifact (Cosign) & SBOM:** Tích hợp ký binary & Offline Bundle bằng Cosign, tự động sinh SBOM (Syft/SPDX) trong GitHub Actions release, hoàn thiện tài liệu vận hành Production.
+## Phase 9 (v0.5): Rolling Upgrade & DevSecOps Hardening
+- [ ] **Task 22 — `vkube upgrade` & Hardening:** Implement rolling upgrade an toàn từng node qua `kubeadm upgrade`, bổ sung kiểm tra đồng bộ giờ (`chrony`/`systemd-timesyncd`) trong `preflight`, tùy chọn `metrics-server` dùng `serverTLSBootstrap` (thay `--kubelet-insecure-tls`) và bộ cấu hình CIS Benchmark cơ bản.
+
+---
+
+## Phase 10 (v1.0): Production-ready & Supply Chain Security
+- [ ] **Task 23 — Ký Artifact (Cosign) & SBOM:** Tích hợp ký binary & Offline Bundle bằng Cosign, tự động sinh SBOM (Syft/SPDX) trong GitHub Actions release, hoàn thiện tài liệu vận hành Production.
