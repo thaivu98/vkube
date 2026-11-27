@@ -11,8 +11,35 @@ spec:
       args:
         - manager
       env:
+{{- if .BGPEnable }}
+        - name: vip_arp
+          value: "false"
+        - name: bgp_enable
+          value: "true"
+        - name: bgp_routerinterface
+          value: "{{ .Interface }}"
+        - name: bgp_as
+          value: "{{ .BGPAS }}"
+        - name: bgp_peeraddress
+          value: "{{ .BGPPeerAddress }}"
+        - name: bgp_peeras
+          value: "{{ .BGPPeerAS }}"
+        - name: vip_leaderelection
+          value: "false"
+{{- else }}
         - name: vip_arp
           value: "true"
+        - name: vip_leaderelection
+          value: "true"
+        - name: vip_leasename
+          value: plndr-cp-lock
+        - name: vip_leaseduration
+          value: "5"
+        - name: vip_renewdeadline
+          value: "3"
+        - name: vip_retryperiod
+          value: "1"
+{{- end }}
         - name: port
           value: "6443"
         - name: vip_interface
@@ -27,16 +54,6 @@ spec:
           value: "false"
         - name: svc_enable
           value: "false"
-        - name: vip_leaderelection
-          value: "true"
-        - name: vip_leasename
-          value: plndr-cp-lock
-        - name: vip_leaseduration
-          value: "5"
-        - name: vip_renewdeadline
-          value: "3"
-        - name: vip_retryperiod
-          value: "1"
         - name: address
           value: "{{ .VIP }}"
       securityContext:

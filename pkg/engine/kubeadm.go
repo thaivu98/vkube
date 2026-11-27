@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -151,6 +152,31 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 		}
 	}
 
+	// Nếu bật EncryptSecrets, sinh khóa AES-CBC 32-byte và phân phối đồng bộ tới TOÀN BỘ Control Plane trước khi init/join
+	if state.Config.Spec.ControlPlane.EncryptSecrets {
+		rawKey := make([]byte, 32)
+		if _, err := rand.Read(rawKey); err != nil {
+			return fmt.Errorf("generate etcd secret encryption key: %w", err)
+		}
+		encYAML := templates.RenderEncryptionConfig(base64.StdEncoding.EncodeToString(rawKey))
+		if err := state.Pool.RunParallel(ctx, cps, func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
+			if err := r.WriteFile(ctx, encYAML, ".vkube-tmp/encryption-config.yaml", 0o600); err != nil {
+				return err
+			}
+			u := state.Config.EffectiveSSH(cp).User
+			cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p -m 0700 /etc/kubernetes/enc
+install -m 0600 "$USER_HOME/.vkube-tmp/encryption-config.yaml" /etc/kubernetes/enc/encryption-config.yaml
+rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
+			_, err := r.RunSudo(ctx, cmd)
+			return err
+		}); err != nil {
+			return fmt.Errorf("distribute etcd EncryptionConfiguration: %w", err)
+		}
+		fmt.Fprintf(e.Out, "  [security]  Đã kích hoạt mã hóa Secret trong etcd (Encryption at Rest AES-CBC) trên %d Control Plane(s)\n", len(cps))
+	}
+
 	// 1. Nếu có cấu hình VIP (kube-vip), ghi sẵn static pod lên CP-1 với super-admin.conf trước khi kubeadm init
 	if state.Config.Spec.VIP != "" {
 		if err := e.writeKubeVipManifest(ctx, state, cp1, cp1Runner, "/etc/kubernetes/super-admin.conf"); err != nil {
@@ -173,17 +199,21 @@ func (e *Engine) runKubeadmCluster(ctx context.Context, state *ClusterState) err
 	}
 
 	initYAML, err := templates.RenderKubeadmInit(templates.KubeadmInitData{
-		ClusterName:          state.Config.Metadata.Name,
-		KubernetesVersion:    state.BundleManifest.KubernetesVersion,
-		AdvertiseAddress:     cp1.Host,
-		NodeName:             cp1.Name,
-		ControlPlaneEndpoint: state.Config.Spec.ControlPlaneEndpoint,
-		PodSubnet:            state.Config.Spec.Networking.PodSubnet,
-		ServiceSubnet:        state.Config.Spec.Networking.ServiceSubnet,
-		CertificateKey:       certKey,
-		CertSANs:             certSANs,
-		ImagePullPolicy:      pullPolicy,
-		ImageRepository:      state.Config.Spec.Registry.ImageRepository,
+		ClusterName:                state.Config.Metadata.Name,
+		KubernetesVersion:          state.BundleManifest.KubernetesVersion,
+		AdvertiseAddress:           cp1.Host,
+		NodeName:                   cp1.Name,
+		ControlPlaneEndpoint:       state.Config.Spec.ControlPlaneEndpoint,
+		PodSubnet:                  state.Config.Spec.Networking.PodSubnet,
+		ServiceSubnet:              state.Config.Spec.Networking.ServiceSubnet,
+		CertificateKey:             certKey,
+		CertSANs:                   certSANs,
+		ImagePullPolicy:            pullPolicy,
+		ImageRepository:            state.Config.Spec.Registry.ImageRepository,
+		APIServerExtraArgs:         templates.SortedArgs(state.Config.Spec.ControlPlane.APIServerExtraArgs),
+		ControllerManagerExtraArgs: templates.SortedArgs(state.Config.Spec.ControlPlane.ControllerManagerExtraArgs),
+		SchedulerExtraArgs:         templates.SortedArgs(state.Config.Spec.ControlPlane.SchedulerExtraArgs),
+		EncryptSecrets:             state.Config.Spec.ControlPlane.EncryptSecrets,
 	})
 	if err != nil {
 		return fmt.Errorf("render kubeadm-init.yaml: %w", err)
@@ -362,13 +392,20 @@ func (e *Engine) writeKubeVipManifest(ctx context.Context, state *ClusterState, 
 	if state.OnlineMode {
 		pullPolicy = "IfNotPresent"
 	}
-	manifestBytes, err := templates.RenderKubeVip(templates.KubeVipData{
+	vipData := templates.KubeVipData{
 		Image:           fmt.Sprintf("ghcr.io/kube-vip/kube-vip:%s", kubeVipVer),
 		VIP:             state.Config.Spec.VIP,
 		Interface:       iface,
 		KubeconfigPath:  kubeconfigPath,
 		ImagePullPolicy: pullPolicy,
-	})
+	}
+	if bgp := state.Config.Spec.VIPBGP; bgp != nil && bgp.Enabled {
+		vipData.BGPEnable = true
+		vipData.BGPAS = bgp.LocalASN
+		vipData.BGPPeerAS = bgp.PeerASN
+		vipData.BGPPeerAddress = bgp.PeerIP
+	}
+	manifestBytes, err := templates.RenderKubeVip(vipData)
 	if err != nil {
 		return err
 	}

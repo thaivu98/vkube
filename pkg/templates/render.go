@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -11,19 +12,46 @@ import (
 //go:embed files/*
 var embeddedFS embed.FS
 
+// KubeadmArg biểu diễn cặp name/value cho extraArgs theo schema kubeadm v1beta4.
+type KubeadmArg struct {
+	Name  string
+	Value string
+}
+
+// SortedArgs chuyển map[string]string sang slice KubeadmArg đã sắp xếp ổn định theo khóa.
+func SortedArgs(m map[string]string) []KubeadmArg {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]KubeadmArg, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, KubeadmArg{Name: k, Value: m[k]})
+	}
+	return out
+}
+
 // KubeadmInitData chứa tham số render file kubeadm-init.yaml (v1beta4).
 type KubeadmInitData struct {
-	ClusterName          string
-	KubernetesVersion    string
-	AdvertiseAddress     string
-	NodeName             string
-	ControlPlaneEndpoint string
-	PodSubnet            string
-	ServiceSubnet        string
-	CertificateKey       string
-	CertSANs             []string
-	ImagePullPolicy      string
-	ImageRepository      string
+	ClusterName                string
+	KubernetesVersion          string
+	AdvertiseAddress           string
+	NodeName                   string
+	ControlPlaneEndpoint       string
+	PodSubnet                  string
+	ServiceSubnet              string
+	CertificateKey             string
+	CertSANs                   []string
+	ImagePullPolicy            string
+	ImageRepository            string
+	APIServerExtraArgs         []KubeadmArg
+	ControllerManagerExtraArgs []KubeadmArg
+	SchedulerExtraArgs         []KubeadmArg
+	EncryptSecrets             bool
 }
 
 // KubeadmJoinData chứa tham số render file kubeadm-join.yaml (v1beta4) để tránh lộ token/certificateKey trên command line (ps).
@@ -38,13 +66,33 @@ type KubeadmJoinData struct {
 	CertificateKey           string
 }
 
-// KubeVipData chứa tham số render static pod kube-vip.yaml cho HA Control Plane.
+// KubeVipData chứa tham số render static pod kube-vip.yaml cho HA Control Plane (L2 ARP hoặc BGP).
 type KubeVipData struct {
 	Image           string
 	VIP             string
 	Interface       string
 	KubeconfigPath  string
 	ImagePullPolicy string
+	BGPEnable       bool
+	BGPAS           uint32
+	BGPPeerAS       uint32
+	BGPPeerAddress  string
+}
+
+// RenderEncryptionConfig sinh file EncryptionConfiguration (AES-CBC + identity fallback) để mã hóa Secret trong etcd.
+func RenderEncryptionConfig(base64Key string) []byte {
+	return []byte(fmt.Sprintf(`apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+    providers:
+      - aescbc:
+          keys:
+            - name: vkube-key-1
+              secret: %s
+      - identity: {}
+`, base64Key))
 }
 
 // ClusterTemplateData chứa tham số render file cluster.yaml mẫu đầy đủ hướng dẫn.

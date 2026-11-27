@@ -44,16 +44,18 @@ type Runner interface {
 	Close() error
 }
 
-// Client là cài đặt Pure Go của Runner sử dụng golang.org/x/crypto/ssh và pkg/sftp.
+// Client là cài đặt Pure Go của Runner sử dụng golang.org/x/crypto/ssh và pkg/sftp (hỗ trợ cả SSH Bastion / Jump Host).
 type Client struct {
-	nodeName  string
-	host      string
-	cfg       api.SSHConfig
-	conn      *gossh.Client
-	agentConn io.Closer
+	nodeName      string
+	host          string
+	cfg           api.SSHConfig
+	conn          *gossh.Client
+	agentConn     io.Closer
+	bastionClient *gossh.Client
+	bastionAgent  io.Closer
 }
 
-// Dial kết nối SSH tới một Target Node bằng Pure Go (hỗ trợ Private Key, ssh-agent và Password).
+// Dial kết nối SSH tới một Target Node bằng Pure Go (hỗ trợ Private Key, ssh-agent, Password và SSH Bastion / ProxyJump).
 func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Client, error) {
 	authMethods, agentConn, err := buildAuthMethods(sshCfg)
 	if err != nil {
@@ -84,26 +86,103 @@ func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Cl
 		Timeout:         defaultDialTimeout,
 	}
 
-	dialer := &net.Dialer{Timeout: defaultDialTimeout}
-	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		closeAgent()
-		return nil, fmt.Errorf("ssh tcp dial %s (%s): %w", nodeName, addr, err)
+	var (
+		rawConn       net.Conn
+		bastionClient *gossh.Client
+		bastionAgent  io.Closer
+	)
+	closeBastion := func() {
+		if bastionClient != nil {
+			_ = bastionClient.Close()
+		}
+		if bastionAgent != nil {
+			_ = bastionAgent.Close()
+		}
+	}
+
+	// Nếu có cấu hình Bastion/Jump Host, mở tunnel SSH xuyên qua Bastion bằng 100% Pure Go
+	if sshCfg.Bastion != nil && strings.TrimSpace(sshCfg.Bastion.Host) != "" {
+		b := sshCfg.Bastion
+		bCfg := api.SSHConfig{
+			User:                  b.User,
+			Port:                  b.Port,
+			PrivateKeyPath:        b.PrivateKeyPath,
+			PrivateKeyPassphrase:  b.PrivateKeyPassphrase,
+			Password:              b.Password,
+			KnownHostsPath:        b.KnownHostsPath,
+			InsecureIgnoreHostKey: b.InsecureIgnoreHostKey || sshCfg.InsecureIgnoreHostKey,
+		}
+		if bCfg.Port == 0 {
+			bCfg.Port = api.DefaultSSHPort
+		}
+		if bCfg.User == "" {
+			bCfg.User = sshCfg.User
+		}
+		bAuth, bAgent, err := buildAuthMethods(bCfg)
+		if err != nil {
+			closeAgent()
+			return nil, fmt.Errorf("bastion %s: %w", b.Host, err)
+		}
+		bastionAgent = bAgent
+
+		bHostKeyCB, err := buildHostKeyCallback(bCfg)
+		if err != nil {
+			closeBastion()
+			closeAgent()
+			return nil, fmt.Errorf("bastion %s host key callback: %w", b.Host, err)
+		}
+		bAddr := net.JoinHostPort(b.Host, fmt.Sprintf("%d", bCfg.Port))
+		dialer := &net.Dialer{Timeout: defaultDialTimeout}
+		bRaw, err := dialer.DialContext(ctx, "tcp", bAddr)
+		if err != nil {
+			closeBastion()
+			closeAgent()
+			return nil, fmt.Errorf("ssh tcp dial bastion %s: %w", bAddr, err)
+		}
+		bc, bChans, bReqs, err := gossh.NewClientConn(bRaw, bAddr, &gossh.ClientConfig{
+			User:            bCfg.User,
+			Auth:            bAuth,
+			HostKeyCallback: bHostKeyCB,
+			Timeout:         defaultDialTimeout,
+		})
+		if err != nil {
+			_ = bRaw.Close()
+			closeBastion()
+			closeAgent()
+			return nil, fmt.Errorf("ssh handshake bastion %s: %w", bAddr, err)
+		}
+		bastionClient = gossh.NewClient(bc, bChans, bReqs)
+		rawConn, err = bastionClient.Dial("tcp", addr)
+		if err != nil {
+			closeBastion()
+			closeAgent()
+			return nil, fmt.Errorf("bastion %s dial target %s (%s): %w", bAddr, nodeName, addr, err)
+		}
+	} else {
+		dialer := &net.Dialer{Timeout: defaultDialTimeout}
+		rawConn, err = dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			closeAgent()
+			return nil, fmt.Errorf("ssh tcp dial %s (%s): %w", nodeName, addr, err)
+		}
 	}
 
 	c, chans, reqs, err := gossh.NewClientConn(rawConn, addr, clientCfg)
 	if err != nil {
 		_ = rawConn.Close()
+		closeBastion()
 		closeAgent()
 		return nil, fmt.Errorf("ssh handshake %s (%s): %w", nodeName, addr, err)
 	}
 
 	return &Client{
-		nodeName:  nodeName,
-		host:      host,
-		cfg:       sshCfg,
-		conn:      gossh.NewClient(c, chans, reqs),
-		agentConn: agentConn,
+		nodeName:      nodeName,
+		host:          host,
+		cfg:           sshCfg,
+		conn:          gossh.NewClient(c, chans, reqs),
+		agentConn:     agentConn,
+		bastionClient: bastionClient,
+		bastionAgent:  bastionAgent,
 	}, nil
 }
 
@@ -111,14 +190,28 @@ func (c *Client) NodeName() string { return c.nodeName }
 func (c *Client) Host() string     { return c.host }
 
 func (c *Client) Close() error {
+	var firstErr error
+	if c.conn != nil {
+		if err := c.conn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		c.conn = nil
+	}
 	if c.agentConn != nil {
 		_ = c.agentConn.Close()
 		c.agentConn = nil
 	}
-	if c.conn != nil {
-		return c.conn.Close()
+	if c.bastionClient != nil {
+		if err := c.bastionClient.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		c.bastionClient = nil
 	}
-	return nil
+	if c.bastionAgent != nil {
+		_ = c.bastionAgent.Close()
+		c.bastionAgent = nil
+	}
+	return firstErr
 }
 
 // Run thực thi một lệnh shell trên Target Node với quyền user SSH hiện tại.
@@ -272,6 +365,43 @@ func (c *Client) DownloadFile(ctx context.Context, remotePosixPath, localPath st
 		return fmt.Errorf("sftp download %s -> %s: %w", remotePosixPath, localPath, err)
 	}
 	return dst.Close()
+}
+
+// ListDirNames liệt kê danh sách tên file trong thư mục remotePosixDir qua Pure Go SFTP.
+func (c *Client) ListDirNames(ctx context.Context, remotePosixDir string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sftpClient, err := sftp.NewClient(c.conn)
+	if err != nil {
+		return nil, fmt.Errorf("open sftp session on %s: %w", c.nodeName, err)
+	}
+	defer sftpClient.Close()
+
+	infos, err := sftpClient.ReadDir(remotePosixDir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(infos))
+	for _, info := range infos {
+		if !info.IsDir() {
+			names = append(names, info.Name())
+		}
+	}
+	return names, nil
+}
+
+// RemoveFile xóa một file từ xa trên máy chủ SFTP bằng Pure Go SFTP.
+func (c *Client) RemoveFile(ctx context.Context, remotePosixPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sftpClient, err := sftp.NewClient(c.conn)
+	if err != nil {
+		return fmt.Errorf("open sftp session on %s: %w", c.nodeName, err)
+	}
+	defer sftpClient.Close()
+	return sftpClient.Remove(remotePosixPath)
 }
 
 // buildHostKeyCallback xác thực SSH host key qua ~/.ssh/known_hosts theo cơ chế TOFU (Trust On First Use):

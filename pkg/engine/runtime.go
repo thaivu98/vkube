@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -188,7 +189,7 @@ rm -rf %s
 			remoteWorkDir, remoteWorkDir,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir,
 			remoteWorkDir, remoteWorkDir, remoteImageDir,
-			kubeletExtraArgsCmd(node.Host),
+			kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs),
 			containerdConfigPatchCmd(sandboxImage),
 			remoteImageDir,
 			remoteWorkDir,
@@ -198,12 +199,22 @@ rm -rf %s
 		if _, err := r.RunSudo(ctx, installScript); err != nil {
 			return fmt.Errorf("install runtime & import images: %w", err)
 		}
+		needRestartContainerd := false
 		if len(state.Config.Spec.Registry.Mirrors) > 0 {
 			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r, sshUser); err != nil {
 				return fmt.Errorf("configure private registry mirrors: %w", err)
 			}
-			if _, err := r.RunSudo(ctx, "systemctl restart containerd"); err != nil {
-				return fmt.Errorf("restart containerd after registry mirror config: %w", err)
+			needRestartContainerd = true
+		}
+		if hasProxyConfig(state.Config.Spec.Proxy) {
+			if err := configureContainerdProxy(ctx, state.Config, r, sshUser); err != nil {
+				return fmt.Errorf("configure containerd HTTP proxy: %w", err)
+			}
+			needRestartContainerd = true
+		}
+		if needRestartContainerd {
+			if _, err := r.RunSudo(ctx, "systemctl daemon-reload && systemctl restart containerd"); err != nil {
+				return fmt.Errorf("restart containerd after mirror/proxy config: %w", err)
 			}
 		}
 		fmt.Fprintf(e.Out, "  [runtime]   %-12s OK\n", node.Name)
@@ -242,13 +253,76 @@ func decompressZstdToTempTar(zstPath string) (string, error) {
 }
 
 // kubeletExtraArgsCmd dùng systemd drop-in riêng (20-vkube-node-ip.conf) thay vì ghi đè /etc/default/kubelet,
-// và chỉ gắn --node-ip khi host là địa chỉ IP hợp lệ (tránh lỗi kubelet nếu host là tên DNS).
-func kubeletExtraArgsCmd(host string) string {
+// gắn --node-ip khi host là địa chỉ IP hợp lệ và ghép thêm spec.controlPlane.kubeletExtraArgs (nếu có).
+func kubeletExtraArgsCmd(host string, extraArgs map[string]string) string {
+	var args []string
 	trimmed := strings.TrimSpace(host)
 	if net.ParseIP(trimmed) != nil {
-		return fmt.Sprintf(`printf '[Service]\nEnvironment="KUBELET_EXTRA_ARGS=--node-ip=%s"\n' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf`, trimmed)
+		args = append(args, fmt.Sprintf("--node-ip=%s", trimmed))
+	}
+	if len(extraArgs) > 0 {
+		keys := make([]string, 0, len(extraArgs))
+		for k := range extraArgs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			flagName := strings.TrimPrefix(k, "--")
+			args = append(args, fmt.Sprintf("--%s=%s", flagName, extraArgs[k]))
+		}
+	}
+	if len(args) > 0 {
+		return fmt.Sprintf(`printf '[Service]\nEnvironment="KUBELET_EXTRA_ARGS=%s"\n' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf`, strings.Join(args, " "))
 	}
 	return "rm -f /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf"
+}
+
+func hasProxyConfig(p api.ProxyConfig) bool {
+	return strings.TrimSpace(p.HTTPProxy) != "" || strings.TrimSpace(p.HTTPSProxy) != ""
+}
+
+// renderContainerdProxyDropin sinh nội dung systemd drop-in /etc/systemd/system/containerd.service.d/http-proxy.conf.
+func renderContainerdProxyDropin(cfg *api.ClusterConfig) string {
+	var b strings.Builder
+	b.WriteString("[Service]\n")
+	if p := strings.TrimSpace(cfg.Spec.Proxy.HTTPProxy); p != "" {
+		fmt.Fprintf(&b, "Environment=\"HTTP_PROXY=%s\"\n", p)
+	}
+	if p := strings.TrimSpace(cfg.Spec.Proxy.HTTPSProxy); p != "" {
+		fmt.Fprintf(&b, "Environment=\"HTTPS_PROXY=%s\"\n", p)
+	}
+	fmt.Fprintf(&b, "Environment=\"NO_PROXY=%s\"\n", cfg.EffectiveNoProxy())
+	return b.String()
+}
+
+func configureContainerdProxy(ctx context.Context, cfg *api.ClusterConfig, r ssh.Runner, sshUser string) error {
+	content := renderContainerdProxyDropin(cfg)
+	if err := r.WriteFile(ctx, []byte(content), ".vkube-tmp/containerd-proxy.conf", 0o600); err != nil {
+		return err
+	}
+	cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p /etc/systemd/system/containerd.service.d
+install -m 0644 "$USER_HOME/.vkube-tmp/containerd-proxy.conf" /etc/systemd/system/containerd.service.d/http-proxy.conf
+rm -f "$USER_HOME/.vkube-tmp/containerd-proxy.conf"`, sshUser)
+	_, err := r.RunSudo(ctx, cmd)
+	return err
+}
+
+func proxyShellExports(cfg *api.ClusterConfig) string {
+	if !hasProxyConfig(cfg.Spec.Proxy) {
+		return ""
+	}
+	var lines []string
+	if p := strings.TrimSpace(cfg.Spec.Proxy.HTTPProxy); p != "" {
+		lines = append(lines, fmt.Sprintf("export http_proxy=%q HTTP_PROXY=%q", p, p))
+	}
+	if p := strings.TrimSpace(cfg.Spec.Proxy.HTTPSProxy); p != "" {
+		lines = append(lines, fmt.Sprintf("export https_proxy=%q HTTPS_PROXY=%q", p, p))
+	}
+	noProxy := cfg.EffectiveNoProxy()
+	lines = append(lines, fmt.Sprintf("export no_proxy=%q NO_PROXY=%q", noProxy, noProxy))
+	return strings.Join(lines, "\n")
 }
 
 // containerdConfigPatchCmd sinh lệnh cấu hình /etc/containerd/config.toml tương thích cả containerd 1.x và 2.x:
@@ -290,6 +364,9 @@ func (e *Engine) runRuntimeOnlineNodes(ctx context.Context, state *ClusterState,
 		sshUser := state.Config.EffectiveSSH(node).User
 		var dlCmds []string
 		dlCmds = append(dlCmds, "set -euo pipefail")
+		if pe := proxyShellExports(state.Config); pe != "" {
+			dlCmds = append(dlCmds, pe)
+		}
 		dlCmds = append(dlCmds, fmt.Sprintf(`USER_HOME="$(getent passwd %s | cut -d: -f6)"
 STAGE_TMP="$USER_HOME/.vkube-tmp"
 DL_DIR="/var/lib/vkube/online-dl"
@@ -371,18 +448,28 @@ rm -rf "$STAGE_TMP"
 
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host), containerdConfigPatchCmd(sandboxImage)))
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host, state.Config.Spec.ControlPlane.KubeletExtraArgs), containerdConfigPatchCmd(sandboxImage)))
 
 		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries, verify SHA256 & cài containerd/kubelet...\n", node.Name)
 		if _, err := r.RunSudo(ctx, strings.Join(dlCmds, "\n")); err != nil {
 			return fmt.Errorf("online runtime setup failed: %w", err)
 		}
+		needRestartContainerd := false
 		if len(state.Config.Spec.Registry.Mirrors) > 0 {
 			if err := configureRegistryMirrors(ctx, state.Config.Spec.Registry.Mirrors, r, sshUser); err != nil {
 				return fmt.Errorf("configure private registry mirrors: %w", err)
 			}
-			if _, err := r.RunSudo(ctx, "systemctl restart containerd"); err != nil {
-				return fmt.Errorf("restart containerd after registry mirror config: %w", err)
+			needRestartContainerd = true
+		}
+		if hasProxyConfig(state.Config.Spec.Proxy) {
+			if err := configureContainerdProxy(ctx, state.Config, r, sshUser); err != nil {
+				return fmt.Errorf("configure containerd HTTP proxy: %w", err)
+			}
+			needRestartContainerd = true
+		}
+		if needRestartContainerd {
+			if _, err := r.RunSudo(ctx, "systemctl daemon-reload && systemctl restart containerd"); err != nil {
+				return fmt.Errorf("restart containerd after mirror/proxy config: %w", err)
 			}
 		}
 		fmt.Fprintf(e.Out, "  [online]    %-12s OK\n", node.Name)

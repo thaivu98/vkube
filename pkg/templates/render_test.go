@@ -23,7 +23,7 @@ func TestStaticTemplatesEmbedded(t *testing.T) {
 func TestRenderKubeadmInit(t *testing.T) {
 	out, err := RenderKubeadmInit(KubeadmInitData{
 		ClusterName:          "prod-ha",
-		KubernetesVersion:    "v1.32.2",
+		KubernetesVersion:    "v1.36.7",
 		AdvertiseAddress:     "192.0.2.11",
 		NodeName:             "cp-1",
 		ControlPlaneEndpoint: "192.0.2.100:6443",
@@ -31,6 +31,8 @@ func TestRenderKubeadmInit(t *testing.T) {
 		ServiceSubnet:        "10.96.0.0/12",
 		CertificateKey:       "abcdef123456",
 		CertSANs:             []string{"192.0.2.100", "192.0.2.11"},
+		APIServerExtraArgs:   SortedArgs(map[string]string{"oidc-issuer-url": "https://sso.corp/realms/k8s"}),
+		EncryptSecrets:       true,
 	})
 	if err != nil {
 		t.Fatalf("RenderKubeadmInit failed: %v", err)
@@ -41,9 +43,33 @@ func TestRenderKubeadmInit(t *testing.T) {
 		"imagePullPolicy: Never",
 		"controlPlaneEndpoint: \"192.0.2.100:6443\"",
 		"cgroupDriver: systemd",
+		"encryption-provider-config",
+		"/etc/kubernetes/enc/encryption-config.yaml",
+		"oidc-issuer-url",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("expected %q in rendered kubeadm config:\n%s", want, s)
+		}
+	}
+}
+
+func TestRenderKubeVipBGP(t *testing.T) {
+	out, err := RenderKubeVip(KubeVipData{
+		Image:          "ghcr.io/kube-vip/kube-vip:v1.3.2",
+		VIP:            "192.0.2.100",
+		Interface:      "ens160",
+		BGPEnable:      true,
+		BGPAS:          64512,
+		BGPPeerAS:      64500,
+		BGPPeerAddress: "192.0.2.1",
+	})
+	if err != nil {
+		t.Fatalf("RenderKubeVip BGP failed: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{`name: bgp_enable`, `value: "true"`, `value: "64512"`, `value: "64500"`, `value: "192.0.2.1"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected %q in rendered BGP kube-vip manifest:\n%s", want, s)
 		}
 	}
 }

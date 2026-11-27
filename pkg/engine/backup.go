@@ -168,6 +168,29 @@ chmod 0600 "$OUT_ARCHIVE"
 		}
 	}
 
+	// Dọn các bản sao lưu cũ theo chính sách retention (nếu spec.backup.retention > 0)
+	if ret := cfg.Spec.Backup.Retention; ret > 0 {
+		filePrefix := fmt.Sprintf("backup-%s-", cfg.Metadata.Name)
+		var pruned []string
+		switch target {
+		case api.BackupTargetLocal:
+			pruned, err = pruneLocalBackups(filepath.Dir(localPath), filePrefix, ret)
+		case api.BackupTargetS3:
+			s3Prefix := filePrefix
+			if p := strings.Trim(cfg.Spec.Backup.S3.Prefix, "/"); p != "" {
+				s3Prefix = path.Join(p, filePrefix)
+			}
+			pruned, err = s3PruneBackups(ctx, cfg.Spec.Backup.S3, s3Prefix, ret)
+		case api.BackupTargetSFTP:
+			pruned, err = sftpPruneBackups(ctx, cfg.Spec.Backup.SFTP, filePrefix, ret)
+		}
+		if err != nil {
+			fmt.Fprintf(e.Out, "  [retention] Cảnh báo: không thể dọn bản sao lưu cũ (%v)\n", err)
+		} else if len(pruned) > 0 {
+			fmt.Fprintf(e.Out, "  [retention] Đã tự động xóa %d bản sao lưu cũ (giữ %d bản mới nhất)\n", len(pruned), ret)
+		}
+	}
+
 	fmt.Fprintf(e.Out, "\nSao lưu cụm %q thành công sau %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Millisecond))
 	if remoteURI != "" {
 		fmt.Fprintf(e.Out, "  Remote: %s (%.2f MB)\n", remoteURI, float64(size)/(1024*1024))
@@ -435,4 +458,85 @@ func fileSHA256(localPath string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// InstallBackupSchedule cài đặt systemd service + timer (vkube-etcd-backup.timer) trên Primary Control Plane
+// để tự động chụp snapshot etcd + PKI định kỳ vào /var/backups/vkube-etcd và tự xoay vòng theo retention.
+func (e *Engine) InstallBackupSchedule(ctx context.Context, cfg *api.ClusterConfig, onCalendar string) error {
+	cp1 := cfg.ControlPlanes()[0]
+	if strings.TrimSpace(onCalendar) == "" {
+		onCalendar = strings.TrimSpace(cfg.Spec.Backup.Schedule)
+	}
+	if onCalendar == "" {
+		onCalendar = "daily"
+	}
+	retention := cfg.Spec.Backup.Retention
+	if retention <= 0 {
+		retention = 7
+	}
+
+	client, err := ssh.Dial(ctx, cp1.Name, cp1.Host, cfg.EffectiveSSH(cp1))
+	if err != nil {
+		return fmt.Errorf("connect primary control-plane %s: %w", cp1.Name, err)
+	}
+	defer client.Close()
+
+	script := fmt.Sprintf(`set -euo pipefail
+mkdir -p -m 0700 /var/backups/vkube-etcd
+cat <<'EOF' > /usr/local/bin/vkube-etcd-backup.sh
+#!/usr/bin/env bash
+set -euo pipefail
+TS="$(date +%%Y%%m%%d-%%H%%M%%S)"
+BDIR="/var/lib/vkube/sched-backup"
+OUT="/var/backups/vkube-etcd/backup-%s-${TS}.tar.gz"
+rm -rf "$BDIR" && mkdir -p -m 0700 "$BDIR"
+trap 'rm -rf "$BDIR" /var/lib/etcd/vkube-sched-snapshot.db' EXIT
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- \
+  etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  snapshot save /var/lib/etcd/vkube-sched-snapshot.db
+mv /var/lib/etcd/vkube-sched-snapshot.db "$BDIR/etcd-snapshot.db"
+cp -a /etc/kubernetes/pki "$BDIR/pki"
+cp -a /etc/kubernetes/admin.conf "$BDIR/admin.conf"
+tar -czf "$OUT" -C "$BDIR" etcd-snapshot.db pki admin.conf
+chmod 0600 "$OUT"
+ls -1t /var/backups/vkube-etcd/backup-%s-*.tar.gz 2>/dev/null | tail -n +%d | xargs -r rm -f
+EOF
+chmod 0700 /usr/local/bin/vkube-etcd-backup.sh
+
+cat <<'EOF' > /etc/systemd/system/vkube-etcd-backup.service
+[Unit]
+Description=vkube scheduled etcd & PKI backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vkube-etcd-backup.sh
+EOF
+
+cat <<'EOF' > /etc/systemd/system/vkube-etcd-backup.timer
+[Unit]
+Description=vkube scheduled etcd & PKI backup timer
+
+[Timer]
+OnCalendar=%s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now vkube-etcd-backup.timer
+systemctl list-timers --no-pager vkube-etcd-backup.timer || true
+`, cfg.Metadata.Name, cp1.Name, cfg.Metadata.Name, retention+1, onCalendar)
+
+	res, err := client.RunSudo(ctx, script)
+	if err != nil {
+		return fmt.Errorf("install backup systemd timer on %s: %w", cp1.Name, err)
+	}
+	fmt.Fprintf(e.Out, "Đã cài đặt lịch backup etcd tự động trên %s (OnCalendar=%q, retention=%d, thư mục /var/backups/vkube-etcd)!\n%s\n",
+		cp1.Name, onCalendar, retention, strings.TrimSpace(res.Stdout))
+	return nil
 }

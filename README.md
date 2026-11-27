@@ -186,7 +186,23 @@ vkube remove-node -f cluster.yaml --node worker-3 --skip-reset --yes    # Nếu 
   vkube restore -f cluster.yaml --backup s3://k8s-etcd-backups/prod-ha/backup-prod-ha-20261127.tar.gz --yes
   vkube restore -f cluster.yaml --backup sftp://backup@192.0.2.50/data/backups/k8s/backup-prod-ha-20261127.tar.gz --yes
   vkube restore -f cluster.yaml --backup ./backups/prod-ha.tar.gz --yes
+
+  # Cài đặt lịch backup etcd tự động bằng systemd timer trên CP-1 (giữ 7 bản mới nhất):
+  vkube backup schedule -f cluster.yaml --on-calendar daily --retention 7
   ```
+
+### 3. Gia hạn chứng chỉ (`certs`), Đồng bộ Addons (`addons apply`) & Enterprise Networking
+
+```bash
+# Kiểm tra hạn chứng chỉ K8s trên toàn bộ Control Plane & gia hạn không downtime:
+vkube certs check -f cluster.yaml
+vkube certs renew -f cluster.yaml --yes
+
+# Bật thêm Core Addons / customManifests / Labels / Taints / Proxy / Registry Mirrors trên cụm đang sống:
+vkube addons apply -f cluster.yaml
+```
+
+> **Enterprise Networking & Security trong `cluster.yaml`:** Hỗ trợ **SSH Bastion / Jump Host** (`spec.ssh.bastion`, 100% Pure Go), **Corporate HTTP/HTTPS Proxy** (`spec.proxy`), **Encryption at Rest cho Secrets trong `etcd`** (`spec.controlPlane.encryptSecrets: true`), **tùy biến `extraArgs`** (OIDC/Audit Log) và **chế độ BGP** (`spec.vipBGP`, `spec.addons.metalLB.bgp`).
 
 ---
 
@@ -210,10 +226,13 @@ vkube bundle build --arch amd64 --manifest my-versions.yaml
 | `vkube bundle verify <bundle.tar.zst>`                                   | Xác thực toàn bộ SHA256 checksum & metadata của Offline Bundle       |
 | `vkube bundle export-manifest [-o versions.yaml]`                        | Xuất file BOM mặc định để tùy chỉnh                                  |
 | `vkube apply -f <cluster.yaml> [--bundle <file.tar.zst>] [--fast-sync]`  | Triển khai cụm Kubernetes (Calico/Cilium) + Core Addons + `kubeconfig` |
-| `vkube status -f <cluster.yaml>`                                         | Xem trạng thái Nodes, Pods, StorageClasses, LoadBalancer & Metrics     |
+| `vkube status -f <cluster.yaml>`                                         | Xem trạng thái Nodes, Pods, Storage, LB, Metrics & Hạn chứng chỉ       |
+| `vkube addons apply -f <cluster.yaml>`                                   | Cập nhật Core Addons, Labels/Taints, Proxy & Registry trên cụm đang chạy |
+| `vkube certs check\|renew -f <cluster.yaml>`                             | Kiểm tra hạn & gia hạn chứng chỉ K8s trên toàn bộ Control Plane        |
 | `vkube add-node -f <cluster.yaml> [--node <name>] [--bundle <file>]`     | Thêm Worker / Control Plane mới vào cụm đang chạy                      |
 | `vkube remove-node -f <cluster.yaml> --node <name> --yes`                | Drain, gỡ `etcd` member (nếu CP), xóa node và reset máy an toàn        |
-| `vkube backup -f <cluster.yaml> [--target local\|s3\|sftp]`              | Snapshot `etcd` (có verify) + PKI và đẩy về Local / S3-MinIO / SFTP    |
+| `vkube backup -f <cluster.yaml> [--target local\|s3\|sftp] [--retention]`| Snapshot `etcd` (có verify) + PKI và đẩy về Local / S3-MinIO / SFTP    |
+| `vkube backup schedule -f <cluster.yaml> [--on-calendar daily]`          | Cài `systemd timer` tự động backup `etcd` định kỳ trên CP-1            |
 | `vkube restore -f <cluster.yaml> --backup <path\|s3://\|sftp://> --yes`  | Khôi phục `etcd` & PKI cho cụm 1-node / 3-node HA chống split-brain    |
 | `vkube reset -f <cluster.yaml> --yes`                                    | Gỡ bỏ cụm (`kubeadm reset`) và dọn sạch cấu hình trên toàn bộ nodes    |
 

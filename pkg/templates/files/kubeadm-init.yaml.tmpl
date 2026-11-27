@@ -22,11 +22,48 @@ imageRepository: "{{ .ImageRepository }}"
 networking:
   podSubnet: "{{ .PodSubnet }}"
   serviceSubnet: "{{ .ServiceSubnet }}"
-{{- if .CertSANs }}
+{{- if or .CertSANs .APIServerExtraArgs .EncryptSecrets }}
 apiServer:
+{{- if .CertSANs }}
   certSANs:
 {{- range .CertSANs }}
     - "{{ . }}"
+{{- end }}
+{{- end }}
+{{- if or .APIServerExtraArgs .EncryptSecrets }}
+  extraArgs:
+{{- if .EncryptSecrets }}
+    - name: encryption-provider-config
+      value: "/etc/kubernetes/enc/encryption-config.yaml"
+{{- end }}
+{{- range .APIServerExtraArgs }}
+    - name: "{{ .Name }}"
+      value: "{{ .Value }}"
+{{- end }}
+{{- end }}
+{{- if .EncryptSecrets }}
+  extraVolumes:
+    - name: vkube-enc
+      hostPath: "/etc/kubernetes/enc"
+      mountPath: "/etc/kubernetes/enc"
+      readOnly: true
+      pathType: DirectoryOrCreate
+{{- end }}
+{{- end }}
+{{- if .ControllerManagerExtraArgs }}
+controllerManager:
+  extraArgs:
+{{- range .ControllerManagerExtraArgs }}
+    - name: "{{ .Name }}"
+      value: "{{ .Value }}"
+{{- end }}
+{{- end }}
+{{- if .SchedulerExtraArgs }}
+scheduler:
+  extraArgs:
+{{- range .SchedulerExtraArgs }}
+    - name: "{{ .Name }}"
+      value: "{{ .Value }}"
 {{- end }}
 {{- end }}
 ---

@@ -4,13 +4,142 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/thaivu98/vkube/pkg/api"
 	"github.com/thaivu98/vkube/pkg/ssh"
 	"github.com/thaivu98/vkube/pkg/templates"
+	"github.com/thaivu98/vkube/pkg/versions"
 )
+
+// ApplyAddonsOptions chứa tham số cho lệnh `vkube addons apply`.
+type ApplyAddonsOptions struct {
+	ManifestPath string
+}
+
+// ApplyAddons đồng bộ lại Core Addons, customManifests, Labels/Taints, Proxy và Private Registry Mirrors
+// lên một cụm Kubernetes đang vận hành mà không cần dựng lại cụm.
+func (e *Engine) ApplyAddons(ctx context.Context, cfg *api.ClusterConfig, opts ApplyAddonsOptions) error {
+	start := time.Now()
+	bom, err := versions.Load(opts.ManifestPath)
+	if err != nil {
+		return fmt.Errorf("load BOM manifest: %w", err)
+	}
+
+	pool, err := ssh.ConnectAll(ctx, cfg, e.Out)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	cp1 := cfg.ControlPlanes()[0]
+	cp1Runner, err := pool.Get(cp1.Name)
+	if err != nil {
+		return err
+	}
+
+	// Phát hiện kiến trúc của CP-1 để resolve BOM & đảm bảo manifest addon có sẵn trên CP-1
+	res, err := cp1Runner.RunSudo(ctx, "uname -m")
+	if err != nil {
+		return fmt.Errorf("detect arch on %s: %w", cp1.Name, err)
+	}
+	arch, err := normalizeLinuxArch(res.Stdout)
+	if err != nil {
+		return err
+	}
+	resolved, err := bom.Resolve(arch)
+	if err != nil {
+		return err
+	}
+
+	// Tải bổ sung các manifest addon chưa có trong /etc/vkube/manifests (kèm verify SHA256 ghim trong BOM)
+	var fetchCmds []string
+	fetchCmds = append(fetchCmds, "set -euo pipefail")
+	if pe := proxyShellExports(cfg); pe != "" {
+		fetchCmds = append(fetchCmds, pe)
+	}
+	fetchCmds = append(fetchCmds, fmt.Sprintf("mkdir -p %s", remoteManifestDir))
+	for _, art := range resolved.Artifacts {
+		if art.Type != versions.ArtifactTypeManifest {
+			continue
+		}
+		destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
+		fetchCmds = append(fetchCmds, fmt.Sprintf(`if [ ! -f %q ]; then
+  curl -fsSL %q -o %q
+  echo "%s  %s" | sha256sum -c - >/dev/null
+fi`, destPath, art.URL, destPath, art.SHA256, destPath))
+	}
+	if _, err := cp1Runner.RunSudo(ctx, strings.Join(fetchCmds, "\n")); err != nil {
+		return fmt.Errorf("ensure addon manifests on %s: %w", cp1.Name, err)
+	}
+
+	state := &ClusterState{
+		Config:      cfg,
+		OnlineMode:  true,
+		ResolvedBOM: resolved,
+		BundleManifest: &api.BundleManifest{
+			ReleaseTag:        resolved.ReleaseTag,
+			KubernetesVersion: resolved.KubernetesVersion,
+			Arch:              resolved.Arch,
+			Components:        resolved.Components,
+		},
+		Pool:  pool,
+		Facts: make(map[string]*api.NodeFacts),
+	}
+
+	if err := e.runAddons(ctx, state); err != nil {
+		return err
+	}
+
+	// Đồng bộ Labels & Taints trên toàn bộ nodes
+	fmt.Fprintf(e.Out, "==> [Reconcile] Đồng bộ Labels/Taints trên %d node(s)...\n", len(cfg.Spec.Nodes))
+	for _, node := range cfg.Spec.Nodes {
+		for k, v := range node.Labels {
+			cmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf label node %s %s=%s --overwrite", node.Name, k, v)
+			if _, err := cp1Runner.RunSudo(ctx, cmd); err != nil {
+				return fmt.Errorf("apply label %s=%s on %s: %w", k, v, node.Name, err)
+			}
+		}
+		for _, t := range node.Taints {
+			taintSpec := fmt.Sprintf("%s=%s:%s", t.Key, t.Value, t.Effect)
+			if t.Value == "" {
+				taintSpec = fmt.Sprintf("%s:%s", t.Key, t.Effect)
+			}
+			cmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf taint node %s %s --overwrite", node.Name, taintSpec)
+			if _, err := cp1Runner.RunSudo(ctx, cmd); err != nil {
+				return fmt.Errorf("apply taint %s on %s: %w", taintSpec, node.Name, err)
+			}
+		}
+	}
+
+	// Đồng bộ Private Registry Mirrors & Proxy drop-in trên toàn bộ nodes nếu có khai báo
+	if len(cfg.Spec.Registry.Mirrors) > 0 || hasProxyConfig(cfg.Spec.Proxy) {
+		fmt.Fprintf(e.Out, "==> [Reconcile] Đồng bộ Registry Mirrors / HTTP Proxy trên %d node(s)...\n", len(cfg.Spec.Nodes))
+		if err := pool.RunParallel(ctx, cfg.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+			u := cfg.EffectiveSSH(node).User
+			if len(cfg.Spec.Registry.Mirrors) > 0 {
+				if err := configureRegistryMirrors(ctx, cfg.Spec.Registry.Mirrors, r, u); err != nil {
+					return err
+				}
+			}
+			if hasProxyConfig(cfg.Spec.Proxy) {
+				if err := configureContainerdProxy(ctx, cfg, r, u); err != nil {
+					return err
+				}
+			}
+			_, err := r.RunSudo(ctx, "systemctl daemon-reload && systemctl restart containerd")
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+
+	fmt.Fprintf(e.Out, "\nĐã đồng bộ Addons & cấu hình cụm %q thành công sau %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Millisecond))
+	return nil
+}
 
 // runAddons cài đặt các Core Addons được bật (metrics-server, local-path, MetalLB, Kong Ingress)
 // và các customManifests do người dùng khai báo trong cluster.yaml (100% offline từ Offline Bundle).
@@ -71,27 +200,14 @@ sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
 		}
 	}
 
-	// 3. MetalLB (Bare-metal LoadBalancer L2) + tự tạo IPAddressPool & L2Advertisement
+	// 3. MetalLB (Bare-metal LoadBalancer L2 hoặc BGP) + tự tạo IPAddressPool & Advertisement tương ứng
 	if addons.MetalLB.Enabled {
-		fmt.Fprintf(e.Out, "  [addon]     metallb (L2 LoadBalancer, ipRange=%s)...\n", addons.MetalLB.IPRange)
-		poolManifest := fmt.Sprintf(`apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: vkube-default-pool
-  namespace: metallb-system
-spec:
-  addresses:
-    - %s
----
-apiVersion: metallb.io/v1beta1
-kind: L2Advertisement
-metadata:
-  name: vkube-default-l2
-  namespace: metallb-system
-spec:
-  ipAddressPools:
-    - vkube-default-pool
-`, addons.MetalLB.IPRange)
+		modeLabel := "L2"
+		if addons.MetalLB.BGP != nil && addons.MetalLB.BGP.Enabled {
+			modeLabel = fmt.Sprintf("BGP AS%d->AS%d @ %s", addons.MetalLB.BGP.LocalASN, addons.MetalLB.BGP.PeerASN, addons.MetalLB.BGP.PeerIP)
+		}
+		fmt.Fprintf(e.Out, "  [addon]     metallb (%s LoadBalancer, ipRange=%s)...\n", modeLabel, addons.MetalLB.IPRange)
+		poolManifest := renderMetalLBPoolManifest(addons.MetalLB)
 
 		if err := cp1Runner.WriteFile(ctx, []byte(poolManifest), ".vkube-tmp/metallb-pool.yaml", 0o600); err != nil {
 			return err
@@ -159,6 +275,51 @@ rm -f "$USER_HOME/%s"`, cp1User, relTmp, relTmp)
 	}
 
 	return nil
+}
+
+// renderMetalLBPoolManifest sinh manifest IPAddressPool kèm L2Advertisement (mặc định) hoặc BGPPeer + BGPAdvertisement.
+func renderMetalLBPoolManifest(m api.MetalLBAddon) string {
+	pool := fmt.Sprintf(`apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: vkube-default-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - %s
+`, m.IPRange)
+	if m.BGP != nil && m.BGP.Enabled {
+		return pool + fmt.Sprintf(`---
+apiVersion: metallb.io/v1beta2
+kind: BGPPeer
+metadata:
+  name: vkube-default-bgp-peer
+  namespace: metallb-system
+spec:
+  myASN: %d
+  peerASN: %d
+  peerAddress: %s
+---
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: vkube-default-bgp
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - vkube-default-pool
+`, m.BGP.LocalASN, m.BGP.PeerASN, m.BGP.PeerIP)
+	}
+	return pool + `---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: vkube-default-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - vkube-default-pool
+`
 }
 
 // renderRegistryHostsToml sinh nội dung chuẩn /etc/containerd/certs.d/<host>/hosts.toml

@@ -388,3 +388,49 @@ spec:
 		t.Fatalf("expected missing S3 accessKey error, got: %v", err)
 	}
 }
+
+func TestParseClusterConfig_BastionProxyAndBGP(t *testing.T) {
+	validEnterprise := `
+metadata:
+  name: prod-enterprise
+spec:
+  arch: amd64
+  vip: 10.0.0.250
+  vipBGP:
+    enabled: true
+    localASN: 64512
+    peerASN: 64500
+    peerIP: 10.0.0.1
+  proxy:
+    httpProxy: http://proxy.corp:8080
+    httpsProxy: http://proxy.corp:8080
+    noProxy: .internal.corp
+  controlPlane:
+    encryptSecrets: true
+    apiServerExtraArgs:
+      oidc-issuer-url: https://sso.corp/realms/k8s
+  ssh:
+    user: ubuntu
+    password: "node-pass"
+    bastion:
+      host: 203.0.113.10
+      password: "bastion-pass"
+  nodes:
+    - { name: cp-1, host: 10.0.0.11, role: control-plane }
+`
+	cfg, err := ParseClusterConfig([]byte(validEnterprise))
+	if err != nil {
+		t.Fatalf("expected valid enterprise config, got: %v", err)
+	}
+	if cfg.Spec.SSH.Bastion.Port != 22 || cfg.Spec.SSH.Bastion.User != "ubuntu" {
+		t.Fatalf("unexpected bastion defaults: %+v", cfg.Spec.SSH.Bastion)
+	}
+	if !strings.Contains(cfg.EffectiveNoProxy(), "10.0.0.250") || !strings.Contains(cfg.EffectiveNoProxy(), ".internal.corp") {
+		t.Fatalf("unexpected EffectiveNoProxy: %q", cfg.EffectiveNoProxy())
+	}
+
+	badProxy := strings.Replace(validEnterprise, "http://proxy.corp:8080", "ftp://bad-proxy", 1)
+	if _, err := ParseClusterConfig([]byte(badProxy)); err == nil || !strings.Contains(err.Error(), "must be a valid http:// or https:// URL") {
+		t.Fatalf("expected invalid proxy URL error, got: %v", err)
+	}
+}

@@ -50,6 +50,9 @@ echo "[LoadBalancer Services]"
 echo ""
 echo "[Node Metrics (kubectl top nodes)]"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf top nodes 2>/dev/null || echo "(metrics-server đang khởi động hoặc chưa bật)"
+echo ""
+echo "[Certificates Expiration]"
+/usr/local/bin/kubeadm certs check-expiration 2>/dev/null | head -n 15 || true
 `)
 	if err == nil && extraRes.Stdout != "" {
 		fmt.Fprint(e.Out, extraRes.Stdout)

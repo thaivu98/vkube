@@ -85,11 +85,17 @@ type ClusterSpec struct {
 	VIP string `yaml:"vip,omitempty" json:"vip,omitempty"`
 	// VIPInterface là tên card mạng gắn VIP (tự động phát hiện nếu bỏ trống).
 	VIPInterface string `yaml:"vipInterface,omitempty" json:"vipInterface,omitempty"`
+	// VIPBGP bật chế độ BGP cho kube-vip (khi các Control Plane nằm khác VLAN L3, thay cho L2 ARP mặc định).
+	VIPBGP *BGPConfig `yaml:"vipBGP,omitempty" json:"vipBGP,omitempty"`
 	// AllowSchedulingOnControlPlane cho phép gỡ taint NoSchedule trên Control Plane (mặc định false để bảo vệ CP;
 	// chỉ nên bật true cho cụm Single-node không có Worker).
 	AllowSchedulingOnControlPlane bool `yaml:"allowSchedulingOnControlPlane,omitempty" json:"allowSchedulingOnControlPlane,omitempty"`
 	// Networking cấu hình dải mạng Pod, Service và CNI.
 	Networking NetworkingConfig `yaml:"networking,omitempty" json:"networking,omitempty"`
+	// Proxy cấu hình HTTP/HTTPS Proxy nội bộ cho containerd và chế độ cài đặt Online.
+	Proxy ProxyConfig `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+	// ControlPlane tùy biến cờ nâng cao cho kube-apiserver/controller-manager/scheduler/kubelet & Encryption at Rest.
+	ControlPlane ControlPlaneExtraConfig `yaml:"controlPlane,omitempty" json:"controlPlane,omitempty"`
 	// Registry cấu hình Private Registry / Harbor Mirror cho containerd (Air-gapped).
 	Registry RegistryConfig `yaml:"registry,omitempty" json:"registry,omitempty"`
 	// Addons cho phép bật/tắt các Core Addons (Metrics Server, Local Path CSI, MetalLB, Kong Ingress) và customManifests.
@@ -131,18 +137,45 @@ type ToggleAddon struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
-// MetalLBAddon cấu hình MetalLB L2 LoadBalancer cho môi trường Bare-metal / On-premise.
+// MetalLBAddon cấu hình MetalLB L2/BGP LoadBalancer cho môi trường Bare-metal / On-premise.
 type MetalLBAddon struct {
-	Enabled bool   `yaml:"enabled" json:"enabled"`
-	IPRange string `yaml:"ipRange,omitempty" json:"ipRange,omitempty"`
+	Enabled bool       `yaml:"enabled" json:"enabled"`
+	IPRange string     `yaml:"ipRange,omitempty" json:"ipRange,omitempty"`
+	BGP     *BGPConfig `yaml:"bgp,omitempty" json:"bgp,omitempty"`
+}
+
+// BGPConfig cấu hình định tuyến BGP cho kube-vip hoặc MetalLB (dùng khi cụm trải trên nhiều VLAN/L3).
+type BGPConfig struct {
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	LocalASN uint32 `yaml:"localASN,omitempty" json:"localASN,omitempty"`
+	PeerASN  uint32 `yaml:"peerASN,omitempty" json:"peerASN,omitempty"`
+	PeerIP   string `yaml:"peerIP,omitempty" json:"peerIP,omitempty"`
+}
+
+// ProxyConfig cấu hình Corporate HTTP/HTTPS Proxy cho containerd và bước tải Online.
+type ProxyConfig struct {
+	HTTPProxy  string `yaml:"httpProxy,omitempty" json:"httpProxy,omitempty"`
+	HTTPSProxy string `yaml:"httpsProxy,omitempty" json:"httpsProxy,omitempty"`
+	NoProxy    string `yaml:"noProxy,omitempty" json:"noProxy,omitempty"`
+}
+
+// ControlPlaneExtraConfig cho phép tùy biến cờ nâng cao (OIDC, Audit Log, Encryption at Rest) cho các thành phần cụm.
+type ControlPlaneExtraConfig struct {
+	APIServerExtraArgs         map[string]string `yaml:"apiServerExtraArgs,omitempty" json:"apiServerExtraArgs,omitempty"`
+	ControllerManagerExtraArgs map[string]string `yaml:"controllerManagerExtraArgs,omitempty" json:"controllerManagerExtraArgs,omitempty"`
+	SchedulerExtraArgs         map[string]string `yaml:"schedulerExtraArgs,omitempty" json:"schedulerExtraArgs,omitempty"`
+	KubeletExtraArgs           map[string]string `yaml:"kubeletExtraArgs,omitempty" json:"kubeletExtraArgs,omitempty"`
+	EncryptSecrets             bool              `yaml:"encryptSecrets,omitempty" json:"encryptSecrets,omitempty"`
 }
 
 // BackupConfig cấu hình đích lưu trữ cho lệnh `vkube backup` và `vkube restore` (local, s3/MinIO, hoặc sftp/NAS).
 type BackupConfig struct {
-	Target string             `yaml:"target,omitempty" json:"target,omitempty"` // local | s3 | sftp
-	Local  *LocalBackupConfig `yaml:"local,omitempty" json:"local,omitempty"`
-	S3     *S3BackupConfig    `yaml:"s3,omitempty" json:"s3,omitempty"`
-	SFTP   *SFTPBackupConfig  `yaml:"sftp,omitempty" json:"sftp,omitempty"`
+	Target    string             `yaml:"target,omitempty" json:"target,omitempty"`       // local | s3 | sftp
+	Retention int                `yaml:"retention,omitempty" json:"retention,omitempty"` // Số bản backup giữ lại (0 = giữ tất cả)
+	Schedule  string             `yaml:"schedule,omitempty" json:"schedule,omitempty"`   // Biểu thức OnCalendar systemd timer (vd: "daily", "*-*-* 02:00:00")
+	Local     *LocalBackupConfig `yaml:"local,omitempty" json:"local,omitempty"`
+	S3        *S3BackupConfig    `yaml:"s3,omitempty" json:"s3,omitempty"`
+	SFTP      *SFTPBackupConfig  `yaml:"sftp,omitempty" json:"sftp,omitempty"`
 }
 
 // LocalBackupConfig lưu bản sao lưu về thư mục cục bộ trên máy Deployer (hoặc thư mục đã mount NFS/SMB).
@@ -182,16 +215,29 @@ type NetworkingConfig struct {
 	KubeProxyReplacement bool   `yaml:"kubeProxyReplacement,omitempty" json:"kubeProxyReplacement,omitempty"`
 }
 
-// SSHConfig chứa thông tin xác thực và kết nối SSH (hỗ trợ SSH agent, private key có/không passphrase và password).
-type SSHConfig struct {
-	User                  string `yaml:"user,omitempty" json:"user,omitempty"`
+// BastionConfig cấu hình SSH Jump Host (ProxyJump bằng Pure Go) khi Target Nodes nằm trong mạng private.
+type BastionConfig struct {
+	Host                  string `yaml:"host" json:"host"`
 	Port                  int    `yaml:"port,omitempty" json:"port,omitempty"`
+	User                  string `yaml:"user,omitempty" json:"user,omitempty"`
 	PrivateKeyPath        string `yaml:"privateKeyPath,omitempty" json:"privateKeyPath,omitempty"`
 	PrivateKeyPassphrase  string `yaml:"privateKeyPassphrase,omitempty" json:"privateKeyPassphrase,omitempty"`
 	Password              string `yaml:"password,omitempty" json:"password,omitempty"`
-	SudoPassword          string `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
 	KnownHostsPath        string `yaml:"knownHostsPath,omitempty" json:"knownHostsPath,omitempty"`
 	InsecureIgnoreHostKey bool   `yaml:"insecureIgnoreHostKey,omitempty" json:"insecureIgnoreHostKey,omitempty"`
+}
+
+// SSHConfig chứa thông tin xác thực và kết nối SSH (hỗ trợ SSH agent, private key có/không passphrase, password và Bastion/Jump Host).
+type SSHConfig struct {
+	User                  string         `yaml:"user,omitempty" json:"user,omitempty"`
+	Port                  int            `yaml:"port,omitempty" json:"port,omitempty"`
+	PrivateKeyPath        string         `yaml:"privateKeyPath,omitempty" json:"privateKeyPath,omitempty"`
+	PrivateKeyPassphrase  string         `yaml:"privateKeyPassphrase,omitempty" json:"privateKeyPassphrase,omitempty"`
+	Password              string         `yaml:"password,omitempty" json:"password,omitempty"`
+	SudoPassword          string         `yaml:"sudoPassword,omitempty" json:"sudoPassword,omitempty"`
+	KnownHostsPath        string         `yaml:"knownHostsPath,omitempty" json:"knownHostsPath,omitempty"`
+	InsecureIgnoreHostKey bool           `yaml:"insecureIgnoreHostKey,omitempty" json:"insecureIgnoreHostKey,omitempty"`
+	Bastion               *BastionConfig `yaml:"bastion,omitempty" json:"bastion,omitempty"`
 }
 
 // Taint biểu diễn một Kubernetes Node Taint áp dụng ngay khi node gia nhập cụm.

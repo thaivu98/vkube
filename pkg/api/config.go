@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -75,6 +76,28 @@ func (c *ClusterConfig) ApplyDefaults() {
 	if c.Spec.SSH.SudoPassword == "" {
 		if envSudo := os.Getenv("VKUBE_SUDO_PASSWORD"); envSudo != "" {
 			c.Spec.SSH.SudoPassword = envSudo
+		}
+	}
+	if c.Spec.SSH.Bastion != nil && strings.TrimSpace(c.Spec.SSH.Bastion.Host) != "" {
+		b := c.Spec.SSH.Bastion
+		if b.Port == 0 {
+			b.Port = DefaultSSHPort
+		}
+		if b.User == "" {
+			b.User = c.Spec.SSH.User
+		}
+		if b.PrivateKeyPath == "" && b.Password == "" {
+			if envBastion := os.Getenv("VKUBE_BASTION_PASSWORD"); envBastion != "" {
+				b.Password = envBastion
+			} else if c.Spec.SSH.PrivateKeyPath != "" {
+				b.PrivateKeyPath = c.Spec.SSH.PrivateKeyPath
+			}
+		}
+		if b.KnownHostsPath == "" {
+			b.KnownHostsPath = c.Spec.SSH.KnownHostsPath
+		}
+		if c.Spec.SSH.InsecureIgnoreHostKey {
+			b.InsecureIgnoreHostKey = true
 		}
 	}
 	if c.Spec.Registry.ImageRepository == "" {
@@ -254,6 +277,54 @@ func (c *ClusterConfig) Validate() error {
 	if c.Spec.Addons.MetalLB.Enabled && strings.TrimSpace(c.Spec.Addons.MetalLB.IPRange) == "" {
 		errs = append(errs, "spec.addons.metalLB.ipRange is required when metalLB is enabled (e.g. 192.0.2.200-192.0.2.220)")
 	}
+	if c.Spec.Addons.MetalLB.BGP != nil && c.Spec.Addons.MetalLB.BGP.Enabled {
+		errs = append(errs, validateBGPConfig("spec.addons.metalLB.bgp", c.Spec.Addons.MetalLB.BGP)...)
+	}
+	if c.Spec.VIPBGP != nil && c.Spec.VIPBGP.Enabled {
+		errs = append(errs, validateBGPConfig("spec.vipBGP", c.Spec.VIPBGP)...)
+	}
+
+	if c.Spec.SSH.Bastion != nil && strings.TrimSpace(c.Spec.SSH.Bastion.Host) != "" {
+		b := c.Spec.SSH.Bastion
+		if b.Port < 1 || b.Port > 65535 {
+			errs = append(errs, fmt.Sprintf("spec.ssh.bastion.port %d must be between 1 and 65535", b.Port))
+		}
+		if b.PrivateKeyPath == "" && b.Password == "" && os.Getenv("SSH_AUTH_SOCK") == "" {
+			errs = append(errs, "spec.ssh.bastion requires privateKeyPath, password, VKUBE_BASTION_PASSWORD, or SSH_AUTH_SOCK")
+		}
+	}
+
+	for field, rawURL := range map[string]string{
+		"spec.proxy.httpProxy":  c.Spec.Proxy.HTTPProxy,
+		"spec.proxy.httpsProxy": c.Spec.Proxy.HTTPSProxy,
+	} {
+		if strings.TrimSpace(rawURL) != "" {
+			u, err := url.Parse(rawURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				errs = append(errs, fmt.Sprintf("%s %q must be a valid http:// or https:// URL", field, rawURL))
+			}
+		}
+	}
+
+	for group, m := range map[string]map[string]string{
+		"spec.controlPlane.apiServerExtraArgs":         c.Spec.ControlPlane.APIServerExtraArgs,
+		"spec.controlPlane.controllerManagerExtraArgs": c.Spec.ControlPlane.ControllerManagerExtraArgs,
+		"spec.controlPlane.schedulerExtraArgs":         c.Spec.ControlPlane.SchedulerExtraArgs,
+		"spec.controlPlane.kubeletExtraArgs":           c.Spec.ControlPlane.KubeletExtraArgs,
+	} {
+		for k, v := range m {
+			if strings.TrimSpace(k) == "" || strings.ContainsAny(k, " \t\r\n") {
+				errs = append(errs, fmt.Sprintf("%s has invalid key %q", group, k))
+			}
+			if strings.ContainsAny(v, "\r\n") {
+				errs = append(errs, fmt.Sprintf("%s[%q] must not contain newlines", group, k))
+			}
+		}
+	}
+
+	if c.Spec.Backup.Retention < 0 {
+		errs = append(errs, "spec.backup.retention must be >= 0")
+	}
 	for i, m := range c.Spec.Registry.Mirrors {
 		if strings.TrimSpace(m.Host) == "" || strings.TrimSpace(m.Endpoint) == "" {
 			errs = append(errs, fmt.Sprintf("spec.registry.mirrors[%d] must specify both host and endpoint", i))
@@ -350,4 +421,57 @@ func (c *ClusterConfig) Workers() []NodeConfig {
 		}
 	}
 	return out
+}
+
+// EffectiveNoProxy tổng hợp danh sách NO_PROXY an toàn gồm dải Pod, Service, VIP, IP các node và giá trị người dùng khai báo,
+// đảm bảo lưu lượng nội bộ cụm Kubernetes không bao giờ đi vòng qua Corporate Proxy.
+func (c *ClusterConfig) EffectiveNoProxy() string {
+	entries := []string{"127.0.0.1", "localhost", ".svc", ".cluster.local"}
+	if c.Spec.Networking.PodSubnet != "" {
+		entries = append(entries, c.Spec.Networking.PodSubnet)
+	}
+	if c.Spec.Networking.ServiceSubnet != "" {
+		entries = append(entries, c.Spec.Networking.ServiceSubnet)
+	}
+	if c.Spec.VIP != "" {
+		entries = append(entries, c.Spec.VIP)
+	}
+	for _, n := range c.Spec.Nodes {
+		if n.Host != "" {
+			entries = append(entries, n.Host)
+		}
+		if n.Name != "" {
+			entries = append(entries, n.Name)
+		}
+	}
+	if strings.TrimSpace(c.Spec.Proxy.NoProxy) != "" {
+		for _, part := range strings.Split(c.Spec.Proxy.NoProxy, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				entries = append(entries, p)
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(entries))
+	dedup := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if _, ok := seen[e]; !ok {
+			seen[e] = struct{}{}
+			dedup = append(dedup, e)
+		}
+	}
+	return strings.Join(dedup, ",")
+}
+
+func validateBGPConfig(prefix string, b *BGPConfig) []string {
+	var errs []string
+	if b.LocalASN == 0 {
+		errs = append(errs, prefix+".localASN is required (> 0) when BGP is enabled")
+	}
+	if b.PeerASN == 0 {
+		errs = append(errs, prefix+".peerASN is required (> 0) when BGP is enabled")
+	}
+	if net.ParseIP(strings.TrimSpace(b.PeerIP)) == nil {
+		errs = append(errs, fmt.Sprintf("%s.peerIP %q must be a valid IP address", prefix, b.PeerIP))
+	}
+	return errs
 }

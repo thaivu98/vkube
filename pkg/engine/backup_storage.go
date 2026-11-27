@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -286,4 +288,160 @@ func awsURIEncode(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// pruneLocalBackups xóa các bản sao lưu cũ hơn giới hạn retention (giữ N bản mới nhất theo tên có timestamp).
+func pruneLocalBackups(dir, filePrefix string, retention int) ([]string, error) {
+	if retention <= 0 {
+		return nil, nil
+	}
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var matched []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), filePrefix) && strings.HasSuffix(e.Name(), ".tar.gz") {
+			matched = append(matched, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matched)))
+	if len(matched) <= retention {
+		return nil, nil
+	}
+	var removed []string
+	for _, name := range matched[retention:] {
+		full := filepath.Join(dir, name)
+		if err := os.Remove(full); err != nil {
+			return removed, err
+		}
+		removed = append(removed, full)
+	}
+	return removed, nil
+}
+
+type s3ListBucketResult struct {
+	Contents []struct {
+		Key string `xml:"Key"`
+	} `xml:"Contents"`
+}
+
+// s3PruneBackups liệt kê (ListObjectsV2) và xóa các object backup cũ trên S3/MinIO vượt quá giới hạn retention bằng Pure Go AWS SigV4.
+func s3PruneBackups(ctx context.Context, cfg *api.S3BackupConfig, keyPrefix string, retention int) ([]string, error) {
+	if retention <= 0 {
+		return nil, nil
+	}
+	rawBase, canonicalURI, hostHeader, err := s3ObjectURL(cfg, "")
+	if err != nil {
+		return nil, err
+	}
+	// ListObjectsV2 với canonical query string đã sắp xếp theo thứ tự bảng chữ cái: list-type=2&prefix=...
+	canonicalQuery := fmt.Sprintf("list-type=2&prefix=%s", awsURIEncode(strings.TrimLeft(keyPrefix, "/")))
+	listURL := strings.TrimRight(rawBase, "/") + "/?" + canonicalQuery
+	if !strings.HasSuffix(canonicalURI, "/") {
+		canonicalURI += "/"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.RawQuery = canonicalQuery
+	signS3Request(req, cfg, canonicalURI, hostHeader, sha256Hex(nil), time.Now())
+
+	client := newS3HTTPClient(cfg.InsecureSkipVerify)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("S3 ListObjectsV2: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("S3 ListObjectsV2 failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var parsed s3ListBucketResult
+	if err := xml.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("decode S3 ListObjectsV2 XML: %w", err)
+	}
+
+	var matched []string
+	for _, obj := range parsed.Contents {
+		if strings.HasSuffix(obj.Key, ".tar.gz") {
+			matched = append(matched, obj.Key)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matched)))
+	if len(matched) <= retention {
+		return nil, nil
+	}
+
+	var removed []string
+	for _, key := range matched[retention:] {
+		delURL, delURI, delHost, err := s3ObjectURL(cfg, key)
+		if err != nil {
+			return removed, err
+		}
+		delReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, delURL, nil)
+		if err != nil {
+			return removed, err
+		}
+		signS3Request(delReq, cfg, delURI, delHost, sha256Hex(nil), time.Now())
+		delResp, err := client.Do(delReq)
+		if err != nil {
+			return removed, fmt.Errorf("S3 DELETE %s: %w", key, err)
+		}
+		_ = delResp.Body.Close()
+		if delResp.StatusCode < 200 || delResp.StatusCode >= 300 {
+			return removed, fmt.Errorf("S3 DELETE %s failed (HTTP %d)", key, delResp.StatusCode)
+		}
+		removed = append(removed, key)
+	}
+	return removed, nil
+}
+
+// sftpPruneBackups xóa các bản sao lưu cũ trên SFTP Backup Server vượt quá giới hạn retention.
+func sftpPruneBackups(ctx context.Context, cfg *api.SFTPBackupConfig, filePrefix string, retention int) ([]string, error) {
+	if retention <= 0 {
+		return nil, nil
+	}
+	client, err := ssh.Dial(ctx, "backup-sftp", cfg.Host, api.SSHConfig{
+		User:                  cfg.User,
+		Port:                  cfg.Port,
+		PrivateKeyPath:        cfg.PrivateKeyPath,
+		PrivateKeyPassphrase:  cfg.PrivateKeyPassphrase,
+		Password:              cfg.Password,
+		InsecureIgnoreHostKey: cfg.InsecureIgnoreHostKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	names, err := client.ListDirNames(ctx, cfg.RemoteDir)
+	if err != nil {
+		return nil, err
+	}
+	var matched []string
+	for _, n := range names {
+		if strings.HasPrefix(n, filePrefix) && strings.HasSuffix(n, ".tar.gz") {
+			matched = append(matched, n)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(matched)))
+	if len(matched) <= retention {
+		return nil, nil
+	}
+	var removed []string
+	for _, name := range matched[retention:] {
+		remotePath := path.Join(cfg.RemoteDir, name)
+		if err := client.RemoveFile(ctx, remotePath); err != nil {
+			return removed, err
+		}
+		removed = append(removed, remotePath)
+	}
+	return removed, nil
 }

@@ -29,10 +29,12 @@ On-premise (Online trực tiếp) và Air-gapped (Offline Bundle amd64/arm64).`,
 		newBundleCmd(),
 		newApplyCmd(),
 		newStatusCmd(),
+		newAddonsCmd(),
 		newAddNodeCmd(),
 		newRemoveNodeCmd(),
 		newBackupCmd(),
 		newRestoreCmd(),
+		newCertsCmd(),
 		newResetCmd(),
 	)
 

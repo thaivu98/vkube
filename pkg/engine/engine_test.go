@@ -162,11 +162,11 @@ func TestRenderRegistryHostsToml(t *testing.T) {
 }
 
 func TestKubeletExtraArgsCmd_IPvsDNS(t *testing.T) {
-	ipCmd := kubeletExtraArgsCmd("192.0.2.10")
-	if !strings.Contains(ipCmd, `--node-ip=192.0.2.10`) || !strings.Contains(ipCmd, `20-vkube-node-ip.conf`) {
-		t.Errorf("expected systemd drop-in with --node-ip for IP host, got: %s", ipCmd)
+	ipCmd := kubeletExtraArgsCmd("192.0.2.10", map[string]string{"max-pods": "150"})
+	if !strings.Contains(ipCmd, `--node-ip=192.0.2.10`) || !strings.Contains(ipCmd, `--max-pods=150`) || !strings.Contains(ipCmd, `20-vkube-node-ip.conf`) {
+		t.Errorf("expected systemd drop-in with --node-ip and --max-pods for IP host, got: %s", ipCmd)
 	}
-	dnsCmd := kubeletExtraArgsCmd("worker-1.internal.local")
+	dnsCmd := kubeletExtraArgsCmd("worker-1.internal.local", nil)
 	if strings.Contains(dnsCmd, `--node-ip`) {
 		t.Errorf("DNS host must not set --node-ip, got: %s", dnsCmd)
 	}
@@ -399,5 +399,77 @@ func TestS3BackupUploadDownloadSigV4(t *testing.T) {
 	rp, ok := parseSFTPURI("sftp://backup@10.0.0.50/data/backups/test.tar.gz")
 	if !ok || rp != "/data/backups/test.tar.gz" {
 		t.Fatalf("parseSFTPURI unexpected: rp=%q ok=%v", rp, ok)
+	}
+}
+
+func TestPhase7Helpers_ProxyRetentionAndBGP(t *testing.T) {
+	// 1. Proxy drop-in & EffectiveNoProxy
+	cfg := &api.ClusterConfig{
+		Spec: api.ClusterSpec{
+			VIP:        "10.0.0.250",
+			Networking: api.NetworkingConfig{PodSubnet: "10.244.0.0/16", ServiceSubnet: "10.96.0.0/12"},
+			Proxy:      api.ProxyConfig{HTTPProxy: "http://proxy.corp:8080", HTTPSProxy: "http://proxy.corp:8080", NoProxy: ".corp.local"},
+			Nodes:      []api.NodeConfig{{Name: "cp-1", Host: "10.0.0.1"}},
+		},
+	}
+	dropin := renderContainerdProxyDropin(cfg)
+	for _, want := range []string{`HTTP_PROXY=http://proxy.corp:8080`, `HTTPS_PROXY=http://proxy.corp:8080`, `10.244.0.0/16`, `10.0.0.250`, `.corp.local`} {
+		if !strings.Contains(dropin, want) {
+			t.Errorf("expected %q in containerd proxy drop-in:\n%s", want, dropin)
+		}
+	}
+
+	// 2. pruneLocalBackups keeps newest N
+	dir := t.TempDir()
+	for _, name := range []string{
+		"backup-prod-20260101-010000.tar.gz",
+		"backup-prod-20260102-010000.tar.gz",
+		"backup-prod-20260103-010000.tar.gz",
+		"backup-prod-20260104-010000.tar.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruned, err := pruneLocalBackups(dir, "backup-prod-", 2)
+	if err != nil || len(pruned) != 2 {
+		t.Fatalf("expected 2 pruned local backups, got %v (err=%v)", pruned, err)
+	}
+
+	// 3. s3PruneBackups via in-memory mock transport
+	var deleted []string
+	origFactory := s3TransportFactory
+	t.Cleanup(func() { s3TransportFactory = origFactory })
+	s3TransportFactory = func(_ bool) http.RoundTripper {
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.Method {
+			case http.MethodGet:
+				xmlBody := `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Contents><Key>vkube/backup-prod-20260101.tar.gz</Key></Contents><Contents><Key>vkube/backup-prod-20260102.tar.gz</Key></Contents><Contents><Key>vkube/backup-prod-20260103.tar.gz</Key></Contents></ListBucketResult>`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(xmlBody)), Header: make(http.Header)}, nil
+			case http.MethodDelete:
+				deleted = append(deleted, r.URL.Path)
+				return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			default:
+				return &http.Response{StatusCode: http.StatusMethodNotAllowed, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			}
+		})
+	}
+	s3Pruned, err := s3PruneBackups(context.Background(), &api.S3BackupConfig{
+		Endpoint: "https://minio.internal:9000", Bucket: "b", AccessKey: "ak", SecretKey: "sk",
+	}, "vkube/backup-prod-", 2)
+	if err != nil || len(s3Pruned) != 1 || s3Pruned[0] != "vkube/backup-prod-20260101.tar.gz" || len(deleted) != 1 {
+		t.Fatalf("unexpected s3PruneBackups result: pruned=%v deleted=%v err=%v", s3Pruned, deleted, err)
+	}
+
+	// 4. MetalLB BGP manifest rendering
+	bgpManifest := renderMetalLBPoolManifest(api.MetalLBAddon{
+		Enabled: true,
+		IPRange: "10.0.10.100-10.0.10.120",
+		BGP:     &api.BGPConfig{Enabled: true, LocalASN: 64512, PeerASN: 64500, PeerIP: "10.0.0.1"},
+	})
+	for _, want := range []string{"kind: BGPPeer", "myASN: 64512", "peerASN: 64500", "peerAddress: 10.0.0.1", "kind: BGPAdvertisement"} {
+		if !strings.Contains(bgpManifest, want) {
+			t.Errorf("expected %q in MetalLB BGP manifest:\n%s", want, bgpManifest)
+		}
 	}
 }

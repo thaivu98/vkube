@@ -108,6 +108,7 @@ func newBackupCmd() *cobra.Command {
 	var (
 		configFile      string
 		outputPath      string
+		retention       int
 		insecureHostKey bool
 		storageFlags    backupStorageFlags
 	)
@@ -126,6 +127,9 @@ func newBackupCmd() *cobra.Command {
 			if insecureHostKey {
 				cfg.Spec.SSH.InsecureIgnoreHostKey = true
 			}
+			if retention > 0 {
+				cfg.Spec.Backup.Retention = retention
+			}
 			if err := storageFlags.applyTo(cfg, insecureHostKey); err != nil {
 				return err
 			}
@@ -139,8 +143,44 @@ func newBackupCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&configFile, "file", "f", "", "Đường dẫn tới file cluster.yaml (bắt buộc)")
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Đường dẫn lưu thêm bản sao lưu cục bộ (mặc định: backup-<cluster>-<timestamp>.tar.gz)")
+	cmd.Flags().IntVar(&retention, "retention", 0, "Số bản backup mới nhất cần giữ lại (tự xóa bản cũ hơn; 0 = theo cluster.yaml)")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts")
 	storageFlags.bind(cmd, true)
+	cmd.AddCommand(newBackupScheduleCmd())
+	return cmd
+}
+
+func newBackupScheduleCmd() *cobra.Command {
+	var (
+		configFile      string
+		onCalendar      string
+		retention       int
+		insecureHostKey bool
+	)
+	cmd := &cobra.Command{
+		Use:   "schedule",
+		Short: "Cài đặt systemd timer tự động backup etcd & PKI định kỳ trên Primary Control Plane",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if configFile == "" {
+				return fmt.Errorf("cần chỉ định file cấu hình cụm qua cờ -f / --file")
+			}
+			cfg, err := api.LoadClusterConfig(configFile)
+			if err != nil {
+				return err
+			}
+			if insecureHostKey {
+				cfg.Spec.SSH.InsecureIgnoreHostKey = true
+			}
+			if retention > 0 {
+				cfg.Spec.Backup.Retention = retention
+			}
+			return engine.NewEngine(cmd.OutOrStdout()).InstallBackupSchedule(cmd.Context(), cfg, onCalendar)
+		},
+	}
+	cmd.Flags().StringVarP(&configFile, "file", "f", "", "Đường dẫn tới file cluster.yaml (bắt buộc)")
+	cmd.Flags().StringVar(&onCalendar, "on-calendar", "", "Lịch chạy systemd OnCalendar (vd: 'daily', '*-*-* 02:00:00'; mặc định lấy từ spec.backup.schedule)")
+	cmd.Flags().IntVar(&retention, "retention", 0, "Số bản backup giữ lại trên CP-1 (mặc định: 7)")
+	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts")
 	return cmd
 }
 

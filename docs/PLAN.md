@@ -1,10 +1,14 @@
 # Kế hoạch phát triển `vkube` (v0.1 → v1.0)
 
 ## Current Status / Handover
-- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v0.2)
-- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 6 (v0.2 — Tasks 12 → 16)** — Chờ kiểm tra chéo bản v0.2, sau đó chuyển sang **Phase 7 (v0.3 — Enterprise Readiness & Day-2 Automation)**
-- **Task đang thực hiện:** Đã hoàn thành toàn bộ Phase 6 (v0.2)
+- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v0.3)
+- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 7 (v0.3 — Tasks 17 → 20)** — Sẵn sàng kiểm tra chéo, kiểm thử E2E hoặc chuyển sang **Phase 8 (v0.4 / Task 21 — Packer Golden Image)**
+- **Task đang thực hiện:** Đã hoàn thành toàn bộ Phase 7 (v0.3)
 - **Vừa hoàn thành:**
+  - **Task 20 (Tùy biến `extraArgs`, Encryption at Rest & BGP Mode):** Hỗ trợ `spec.controlPlane.{apiServerExtraArgs,controllerManagerExtraArgs,schedulerExtraArgs,kubeletExtraArgs}` chuẩn `kubeadm v1beta4`, tự sinh & phân phối khóa AES-CBC `/etc/kubernetes/enc/encryption-config.yaml` (`0600`) khi bật `encryptSecrets: true`, và bổ sung chế độ **BGP** cho cả `kube-vip` (`spec.vipBGP`) lẫn MetalLB (`spec.addons.metalLB.bgp`).
+  - **Task 19 (`vkube addons apply`):** Đồng bộ lại Core Addons, `customManifests`, Labels/Taints, HTTP Proxy & Private Registry Mirrors lên cụm đang chạy mà không cần dựng lại.
+  - **Task 18 (`vkube certs check/renew` & Backup Retention/Schedule):** Kiểm tra & gia hạn chứng chỉ tuần tự trên mọi Control Plane kèm cập nhật `kubeconfig` (và hiển thị hạn cert trong `vkube status`); tự dọn bản sao lưu cũ theo `spec.backup.retention` trên Local/S3/SFTP và lệnh `vkube backup schedule` cài `systemd timer` backup định kỳ.
+  - **Task 17 (SSH Bastion & Corporate HTTP Proxy):** Hỗ trợ `spec.ssh.bastion` (`ProxyJump` 100% Pure Go) và `spec.proxy` (tự sinh drop-in `containerd` + export `http_proxy`/`https_proxy`/`no_proxy` an toàn).
   - **Task 16 (LAN HTTP Fan-out & Rocky/AlmaLinux/RHEL 8–9):** Nối `ssh.BundleServer` vào `pkg/engine/runtime.go` (cờ `--fast-sync` hoặc tự bật với cụm >= 3 nodes, tự fallback SFTP nếu bị firewall chặn); mở rộng `preflight` & `os-prep` hỗ trợ **Rocky Linux / AlmaLinux / RHEL 8–9** (SELinux permissive + mở đúng port K8s/CNI trên `firewalld` nếu đang chạy).
   - **Task 15 (Cilium eBPF CNI):** Bổ sung hỗ trợ `spec.networking.cni: cilium` và `spec.networking.kubeProxyReplacement: true` (`--skip-phases=addon/kube-proxy`), nhúng manifest `cilium/cilium v1.20.5` vào `pkg/templates/files/cilium.yaml` bơm động version/PodSubnet/API endpoint, đóng gói sẵn image Cilium trong Offline Bundle và bổ sung dọn dẹp Cilium/BPF trong `vkube reset`.
   - **Task 14 (`vkube backup` & `vkube restore` `etcd` — Multi-target):** Chụp snapshot `etcd` kèm verify (`etcdutl`/`etcdctl snapshot status`), đóng gói cùng `/etc/kubernetes/pki/` & `admin.conf`; hỗ trợ chọn đích lưu trữ qua `spec.backup` hoặc cờ CLI: **`local`**, **`s3`** (AWS S3 / MinIO / Ceph RGW viết bằng **Pure Go AWS SigV4**, không kéo AWS SDK), và **`sftp`** (NAS / Backup Server qua Pure Go SFTP); hỗ trợ khôi phục cụm 1-node và 3-node HA chống split-brain từ cả file cục bộ, `s3://...` lẫn `sftp://...`.
@@ -84,10 +88,10 @@
 ---
 
 ## Phase 7 (v0.3): Enterprise Readiness & Vận hành Day-2 Nâng cao
-- [ ] **Task 17 — SSH Bastion (Jump Host) & Corporate HTTP Proxy:** Hỗ trợ kết nối SSH xuyên qua Jump Host (`spec.ssh.bastion`, viết bằng Pure Go `golang.org/x/crypto/ssh`) cho cụm trong private subnet; hỗ trợ `spec.proxy` (`httpProxy`, `httpsProxy`, `noProxy`) tự sinh systemd drop-in cho `containerd` và áp dụng cho bước tải Online.
-- [ ] **Task 18 — Quản lý Chứng chỉ (`vkube certs check/renew`) & Backup Retention/Schedule:** Thêm lệnh kiểm tra hạn cert (kèm cảnh báo trong `vkube status`) và gia hạn cert an toàn trên toàn bộ Control Plane (`kubeadm certs renew all` + restart static pods); bổ sung `spec.backup.retention` (giữ N bản mới nhất, tự dọn bản cũ trên Local/S3/SFTP) và tùy chọn lập lịch backup `etcd` định kỳ.
-- [ ] **Task 19 — Quản lý Addons & Reconcile cấu hình cụm đang chạy (`vkube addons apply`):** Cho phép bật/cập nhật thêm Core Addons, `customManifests`, Labels/Taints và Private Registry mirrors trên cụm đang vận hành mà không cần dựng lại từ đầu.
-- [ ] **Task 20 — Tùy biến nâng cao `kube-apiserver`/`kubelet` & BGP Mode:** Hỗ trợ truyền `extraArgs` cho `kube-apiserver` / `kubelet` (tích hợp OIDC/Keycloak, Audit Log, Encryption at Rest cho Secrets trong `etcd`) và bổ sung chế độ **BGP** cho `kube-vip` / MetalLB (hỗ trợ hạ tầng L3 khác VLAN).
+- [x] **Task 17 — SSH Bastion (Jump Host) & Corporate HTTP Proxy:** Hỗ trợ kết nối SSH xuyên qua Jump Host (`spec.ssh.bastion`, viết bằng Pure Go `golang.org/x/crypto/ssh`) cho cụm trong private subnet; hỗ trợ `spec.proxy` (`httpProxy`, `httpsProxy`, `noProxy`) tự sinh systemd drop-in cho `containerd` và áp dụng cho bước tải Online.
+- [x] **Task 18 — Quản lý Chứng chỉ (`vkube certs check/renew`) & Backup Retention/Schedule:** Thêm lệnh kiểm tra hạn cert (kèm cảnh báo trong `vkube status`) và gia hạn cert an toàn trên toàn bộ Control Plane (`kubeadm certs renew all` + restart static pods); bổ sung `spec.backup.retention` (giữ N bản mới nhất, tự dọn bản cũ trên Local/S3/SFTP) và tùy chọn lập lịch backup `etcd` định kỳ.
+- [x] **Task 19 — Quản lý Addons & Reconcile cấu hình cụm đang chạy (`vkube addons apply`):** Cho phép bật/cập nhật thêm Core Addons, `customManifests`, Labels/Taints và Private Registry mirrors trên cụm đang vận hành mà không cần dựng lại từ đầu.
+- [x] **Task 20 — Tùy biến nâng cao `kube-apiserver`/`kubelet` & BGP Mode:** Hỗ trợ truyền `extraArgs` cho `kube-apiserver` / `kubelet` (tích hợp OIDC/Keycloak, Audit Log, Encryption at Rest cho Secrets trong `etcd`) và bổ sung chế độ **BGP** cho `kube-vip` / MetalLB (hỗ trợ hạ tầng L3 khác VLAN).
 
 ---
 
