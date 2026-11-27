@@ -5,12 +5,15 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"text/template"
 
 	"github.com/thaivu98/vkube/pkg/api"
 	"gopkg.in/yaml.v3"
 )
+
+var sha256HexRe = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 //go:embed versions.yaml
 var defaultBOMYAML []byte
@@ -142,6 +145,9 @@ func (b *BOM) Validate() error {
 		case ArtifactTypeBinary, ArtifactTypeTarball, ArtifactTypeManifest:
 		default:
 			return fmt.Errorf("BOM artifact %q has unsupported type %q", a.Name, a.Type)
+		}
+		if s := strings.TrimSpace(a.SHA256); s != "" && !sha256HexRe.MatchString(s) {
+			return fmt.Errorf("BOM artifact %q has invalid sha256 %q (must be 64 hex characters)", a.Name, a.SHA256)
 		}
 	}
 	for i, g := range b.ImageGroups {

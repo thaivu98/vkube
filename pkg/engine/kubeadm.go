@@ -197,6 +197,7 @@ USER_HOME="$(getent passwd %s | cut -d: -f6)"
 mkdir -p -m 0700 /etc/vkube
 install -m 0600 "$USER_HOME/.vkube-tmp/kubeadm-init.yaml" /etc/vkube/kubeadm-init.yaml
 rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
+trap 'rm -f /etc/vkube/kubeadm-init.yaml' EXIT
 /usr/local/bin/kubeadm init --config=/etc/vkube/kubeadm-init.yaml`, cp1User)
 	if isHA {
 		initCmd += " --upload-certs"

@@ -36,6 +36,9 @@ func TestLoadDefaultAndResolveMultiArch(t *testing.T) {
 				if strings.Contains(a.URL, arch) {
 					foundArchURL = true
 				}
+				if a.Type == ArtifactTypeManifest && !sha256HexRe.MatchString(a.SHA256) {
+					t.Errorf("manifest artifact %q must have a valid 64-hex pinned sha256, got %q", a.Name, a.SHA256)
+				}
 			}
 			if !foundArchURL {
 				t.Errorf("expected at least one artifact URL to contain arch %q", arch)
@@ -107,5 +110,23 @@ func TestResolve_InvalidArch(t *testing.T) {
 	}
 	if _, err := bom.Resolve("s390x"); err == nil {
 		t.Fatal("expected error for unsupported arch s390x, got nil")
+	}
+}
+
+func TestParse_InvalidSHA256Rejected(t *testing.T) {
+	badYAML := `
+releaseTag: v1.32.2-vkube.1
+components:
+  kubernetes: v1.32.2
+artifacts:
+  - name: bad-manifest
+    component: kubernetes
+    type: manifest
+    url: https://example.com/a.yaml
+    sha256: "not-a-valid-hash; rm -rf /"
+    dest: manifests/a.yaml
+`
+	if _, err := Parse([]byte(badYAML)); err == nil || !strings.Contains(err.Error(), "invalid sha256") {
+		t.Fatalf("expected invalid sha256 error, got: %v", err)
 	}
 }
