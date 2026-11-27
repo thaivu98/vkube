@@ -140,3 +140,25 @@ func TestRenderCilium(t *testing.T) {
 		t.Errorf("rendered Cilium manifest still contains unreplaced placeholder")
 	}
 }
+
+func TestEmbeddedTemplatesContainNoSecrets(t *testing.T) {
+	entries, err := embeddedFS.ReadDir("files")
+	if err != nil {
+		t.Fatalf("read embedded files dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		raw, err := embeddedFS.ReadFile("files/" + e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		content := string(raw)
+		for _, forbidden := range []string{"PRIVATE KEY", "LS0tLS1CRUdJTi", "kind: Secret"} {
+			if strings.Contains(content, forbidden) {
+				t.Errorf("embedded template files/%s must not contain %q (possible static secret/cert)", e.Name(), forbidden)
+			}
+		}
+	}
+}

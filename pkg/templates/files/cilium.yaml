@@ -1,4 +1,4 @@
-# Rendered from official Helm chart cilium/cilium v1.20.5 (eBPF CNI, envoy disabled for lightweight footprint)
+# Rendered from official Helm chart cilium/cilium v1.20.5 (eBPF CNI, envoy & hubble disabled — zero embedded TLS keys)
 # Version, PodSubnet, kubeProxyReplacement, and k8sServiceHost/Port are injected dynamically by vkube.
 ---
 # Source: cilium/templates/cilium-secrets-namespace.yaml
@@ -25,36 +25,6 @@ kind: ServiceAccount
 metadata:
   name: "cilium-operator"
   namespace: kube-system
-
----
-# Source: cilium/templates/cilium-ca-secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: cilium-ca
-  namespace: kube-system
-  labels:
-    cilium.io/helm-template-non-idempotent: "true"
-data:
-  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURGRENDQWZ5Z0F3SUJBZ0lSQUlrOWZtMmJLZHN6VDRCYUFEVlkvV3d3RFFZSktvWklodmNOQVFFTEJRQXcKRkRFU01CQUdBMVVFQXhNSlEybHNhWFZ0SUVOQk1CNFhEVEkyTVRFeU56QXpNall6TUZvWERUSTVNVEV5TmpBegpNall6TUZvd0ZERVNNQkFHQTFVRUF4TUpRMmxzYVhWdElFTkJNSUlCSWpBTkJna3Foa2lHOXcwQkFRRUZBQU9DCkFROEFNSUlCQ2dLQ0FRRUF5WEprZVZhamEvcFBhM1JVTlY5TGpTWXlvKy9DYnVNTXNLM1lIK1QzbFBpSStzbVkKM1QzaHhhUmhHcHZnNTZFNnowajFGRWhTL3g2dlFFTFhNdXh0dE9saHNNM2dYNVdrS0xGc2NFeGwzdzloQzNoLwozVGJTeWdLcklXUndRV3NOa2hLUkxjMHdKb2VBQWlGU3VmUWV2YlVmN0tSa3FINTNsckRuQW9ZWjFkTm9UaWs1ClBqVHU0YjhmZlg3RWtONVRFTXBGemJUUkoyb2E1UEtRek1XU0ZlTk5Tak9IMHJtNEVscDU0aERrMVVDUWV0Z0cKNGZlZXc3TTVKODhqWUtpOG9DY2FhUk83WWtjcGpQdkYzOXIzbmRQS2FEcWFqK2NLcVZwWGFaaFJ3bWRKNHRHVAo5ZzRMZ2R2VVhjaGNhZnlleXlLQStKeVhGN01GQmN1RWszRFdBUUlEQVFBQm8yRXdYekFPQmdOVkhROEJBZjhFCkJBTUNBcVF3SFFZRFZSMGxCQll3RkFZSUt3WUJCUVVIQXdFR0NDc0dBUVVGQndNQ01BOEdBMVVkRXdFQi93UUYKTUFNQkFmOHdIUVlEVlIwT0JCWUVGRW1kNDkrcnI1emdrUmF5SDNTUGpHcG56OVZpTUEwR0NTcUdTSWIzRFFFQgpDd1VBQTRJQkFRQmkzQTJmejI1QkpuVXo5a1lzUVZXck51REU0b2Q2OE5MSjIxaUpHVE4zd3JwNFNPekMvMUlKCnp2ZUYxdjU3a3htRk90eXpuaTdxSk4yYzQ0dDJINVBmSmdSQUp5UStCc1ZQdDNoQjJpNDNjNk9aVkJEUmVXbmcKTlJqZVhWTTBqa3I2RXdjdSs3WGVTUFM4TGhhQnNRd2VOWlRyMC8xMGlaMzQ5VjRNN3hidXVmUjc3UUZsbVRqRApqaFpqV3dyUllhKzdoQTQ0QmduTEZXN2t3ZWVaczVuRUFlMGI4b3QydUFUUXZRb2ZRK0JncmRiUG56OWI3b0FGCjlNZ1Z5QTBOVm8yYWFMQlQ1dTh4ZWJLREpMVDkxSzVoVDB5RFVldjVuNDN5QklWWENhK1E0R3BDRzRTRGVvcm0KdWoyeE5ocDdoZWlHODNGeVB4NkVLVlBIZ1RNN2NWa1kKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
-  ca.key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBeVhKa2VWYWphL3BQYTNSVU5WOUxqU1l5bysvQ2J1TU1zSzNZSCtUM2xQaUkrc21ZCjNUM2h4YVJoR3B2ZzU2RTZ6MGoxRkVoUy94NnZRRUxYTXV4dHRPbGhzTTNnWDVXa0tMRnNjRXhsM3c5aEMzaC8KM1RiU3lnS3JJV1J3UVdzTmtoS1JMYzB3Sm9lQUFpRlN1ZlFldmJVZjdLUmtxSDUzbHJEbkFvWVoxZE5vVGlrNQpQalR1NGI4ZmZYN0VrTjVURU1wRnpiVFJKMm9hNVBLUXpNV1NGZU5OU2pPSDBybTRFbHA1NGhEazFVQ1FldGdHCjRmZWV3N001Sjg4allLaThvQ2NhYVJPN1lrY3BqUHZGMzlyM25kUEthRHFhaitjS3FWcFhhWmhSd21kSjR0R1QKOWc0TGdkdlVYY2hjYWZ5ZXl5S0ErSnlYRjdNRkJjdUVrM0RXQVFJREFRQUJBb0lCQUVHUDl1NWN5YlEvVTdETAp2QXBnMlBSMzNaeG9VSFlKZEZ4ZVFBeGxWMFRIUE1HdWNnOXpiL01FeEV2R05zVDhQdWt1dkFEZFp4RzhHVnFIClJvVysyQmU4cXp4QlRRaWU2YjRLdkpteDY2ZlUyQWRGTVF3OHB3N3pIbUl3VDY2aTJsaFRyYWRqOUF0ZUowWEsKTmFQcXRVU1YyZTJKTlc5M05aRzRRbjhhU1BkRGtZWFdVZFFhczMxeVRpQWQ3UGlqSFdRbVN3ZEFSQWw3ZHFxeApNOWVjcjBPVHk3YVdENTg1THd5bmFxV0ZGc00wNThIbXZNaFl6L3NtMXNJL0lLbFM2dkpQUWZ2Uk9CdThteVYvCjIrZlNFRzBxUXVjU2FpZkFlajhHNjJyajl3Sjc3azlUODd5QlVxcTk0K0VzcUFMQkx3dHF3djVoMHFWNUVEbHQKRytscHZxY0NnWUVBeWYwdWtreERKYXpVK2lPcHhrcEdOdnlGb1U0bGJZZWxVMnFBRnhCSjZKZzc5KzlrZ2hHVwpZdGY2MHpya0paUzVUcS9Fb1pzWHp1dWpPVStKZFJIbGlKaitCcVVYdFVxZllUMG9SbXJpcnNxczU3T1Zab0NrCjhYbkE0TzFuTTMyZndPK2JUS1BIdFJOaEl4Zms5cGQzN2ptcjlKWk5UNU5oY00yKyt0ZVJwUWNDZ1lFQS8xQVoKVGJ2bC9pSnFiNk9oOVlOd0plNEZZNW9pcHZRR0Y5bFFWRGhCUmVmaVR2dWxjMVNxTkRHc0o3YUYwVlJyZnhjeAppVzBrV2k1b2ZndmxFNTVTNkdaUHBJSzdlSmw1WWk4bi9vUDlyUzJYaG1Zb3oyNTRQd0s3d08vUTZQOXA1eEZlCnpBOUx4MDRZeFh2ZUZ5OXVRUXlKRjhCWHdLYXRwckpHWW1XRHNyY0NnWUJiVVlDRm1iN2R3SmFGQkN5VVBpNGkKVytZYU9CZEp2b0tyQk1JbUt6SU8yd3g1bWh4SmhhUUV5ZnBYRncvZ1FhM0pla09lZ0Z5eUt1d2ZVK3NrSjFRcgpmbWVTSDM5cGNmUStaUVRaV1Nka3VMS1ZDaWFvTWM3Z2NSZ1hXSjFJdFNuTmMwWTF6dkhSMXBJYTZJbVdSb0p0CkRGdkdkMUU2Z2JvUzRxSE9ERG1IYndLQmdRQ3piSzRycy9ZaEVEeXVzbGQ2dStGUHRxT3c2THliaWZqU1A5VzEKS2tldEFoWklIWSticW85bTJOVzhud2dTSVhyZU9RV0dKOTZaUmU0SFR3S3hNOTNlRnpDM1UyeStoMVVIekU0VwpEdHB6SHd4UzFtNnR3RnZmSkdPZ1pxanhaYlllUGxYWm9KSkh3Ym1rNTdVZnBDU2VzRm1VQ0lkakM0QVVHMHRkCmtTdnBwd0tCZ0RwS1hXYWdTVkFIZlkwYTZBSU1zQWc1eU1wbFVVdW4yNVVGYm5LaklQL1ZZcElDT3F2eHdsWUsKeWhBclhjVWRCQUgycFg0cTNpVU50dXY5YjNveHFON2tWcXQrUVpCanNWdUJWVENHVURXVmN0SU5iQkRZS0QvaApFVjh6ZlZwUHhoMFhBcisrUGNibkk0clN3RDFXRDEvYXJrUnhlSzlicVZKNGxRRU9GUkZMCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
-
----
-# Source: cilium/templates/hubble/tls-helm/server-secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: hubble-server-certs
-  namespace: kube-system
-  labels:
-    cilium.io/helm-template-non-idempotent: "true"
-
-  annotations:
-type: kubernetes.io/tls
-data:
-  ca.crt:  LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURGRENDQWZ5Z0F3SUJBZ0lSQUlrOWZtMmJLZHN6VDRCYUFEVlkvV3d3RFFZSktvWklodmNOQVFFTEJRQXcKRkRFU01CQUdBMVVFQXhNSlEybHNhWFZ0SUVOQk1CNFhEVEkyTVRFeU56QXpNall6TUZvWERUSTVNVEV5TmpBegpNall6TUZvd0ZERVNNQkFHQTFVRUF4TUpRMmxzYVhWdElFTkJNSUlCSWpBTkJna3Foa2lHOXcwQkFRRUZBQU9DCkFROEFNSUlCQ2dLQ0FRRUF5WEprZVZhamEvcFBhM1JVTlY5TGpTWXlvKy9DYnVNTXNLM1lIK1QzbFBpSStzbVkKM1QzaHhhUmhHcHZnNTZFNnowajFGRWhTL3g2dlFFTFhNdXh0dE9saHNNM2dYNVdrS0xGc2NFeGwzdzloQzNoLwozVGJTeWdLcklXUndRV3NOa2hLUkxjMHdKb2VBQWlGU3VmUWV2YlVmN0tSa3FINTNsckRuQW9ZWjFkTm9UaWs1ClBqVHU0YjhmZlg3RWtONVRFTXBGemJUUkoyb2E1UEtRek1XU0ZlTk5Tak9IMHJtNEVscDU0aERrMVVDUWV0Z0cKNGZlZXc3TTVKODhqWUtpOG9DY2FhUk83WWtjcGpQdkYzOXIzbmRQS2FEcWFqK2NLcVZwWGFaaFJ3bWRKNHRHVAo5ZzRMZ2R2VVhjaGNhZnlleXlLQStKeVhGN01GQmN1RWszRFdBUUlEQVFBQm8yRXdYekFPQmdOVkhROEJBZjhFCkJBTUNBcVF3SFFZRFZSMGxCQll3RkFZSUt3WUJCUVVIQXdFR0NDc0dBUVVGQndNQ01BOEdBMVVkRXdFQi93UUYKTUFNQkFmOHdIUVlEVlIwT0JCWUVGRW1kNDkrcnI1emdrUmF5SDNTUGpHcG56OVZpTUEwR0NTcUdTSWIzRFFFQgpDd1VBQTRJQkFRQmkzQTJmejI1QkpuVXo5a1lzUVZXck51REU0b2Q2OE5MSjIxaUpHVE4zd3JwNFNPekMvMUlKCnp2ZUYxdjU3a3htRk90eXpuaTdxSk4yYzQ0dDJINVBmSmdSQUp5UStCc1ZQdDNoQjJpNDNjNk9aVkJEUmVXbmcKTlJqZVhWTTBqa3I2RXdjdSs3WGVTUFM4TGhhQnNRd2VOWlRyMC8xMGlaMzQ5VjRNN3hidXVmUjc3UUZsbVRqRApqaFpqV3dyUllhKzdoQTQ0QmduTEZXN2t3ZWVaczVuRUFlMGI4b3QydUFUUXZRb2ZRK0JncmRiUG56OWI3b0FGCjlNZ1Z5QTBOVm8yYWFMQlQ1dTh4ZWJLREpMVDkxSzVoVDB5RFVldjVuNDN5QklWWENhK1E0R3BDRzRTRGVvcm0KdWoyeE5ocDdoZWlHODNGeVB4NkVLVlBIZ1RNN2NWa1kKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
-  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURWakNDQWo2Z0F3SUJBZ0lRRHd1Q05KdklzQ2s0QmVYK3g2MG9nekFOQmdrcWhraUc5dzBCQVFzRkFEQVUKTVJJd0VBWURWUVFERXdsRGFXeHBkVzBnUTBFd0hoY05Nall4TVRJM01ETXlOak13V2hjTk1qY3hNVEkzTURNeQpOak13V2pBcU1TZ3dKZ1lEVlFRRERCOHFMbVJsWm1GMWJIUXVhSFZpWW14bExXZHljR011WTJsc2FYVnRMbWx2Ck1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBeCsxNTcwbDlkOC9YMmF5OUNQR28Kb2p5RnNMb0g4KzNldVQrS0w4ZlkvTkpMMjRwQlJlUURseGpHQkhTWWNVSEM5MEYzTlE0dWRUQWxjRHJ0V2hHQwptd1NiOVhKdnNZVmdDMVBsZHFWK0VwZGJycFZDRmFuMm9XNnhZWWczbG9iRFJ6dE1aY3ZUazhSOXp3TnBxM0RmCnk5SU5keksrU01jOENTQkdiUytLcG1zM0ZZaE92VFRnWGU0Rk1rcE9nSSt6Z2JLWkxnTnF4SjI2Ti9RaU1GMkgKTU5scFpPdWZ0RTZ5TjRkc2ZvcmhpMDBQKzAwV29ZYnhpYytlZmZPR2RZeFVVeFNTMlZmTEc3Mk92RU1rRGNySAptQUJoWTdJK1NsYktnT3lEamQwakFaV3ROR0pDZVBnOUZOVU5DYkozU2NKQnEySUtYQnFCSzQxT2g0b3pVT2c4CjBRSURBUUFCbzRHTk1JR0tNQTRHQTFVZER3RUIvd1FFQXdJRm9EQWRCZ05WSFNVRUZqQVVCZ2dyQmdFRkJRY0QKQVFZSUt3WUJCUVVIQXdJd0RBWURWUjBUQVFIL0JBSXdBREFmQmdOVkhTTUVHREFXZ0JSSm5lUGZxNitjNEpFVwpzaDkwajR4cVo4L1ZZakFxQmdOVkhSRUVJekFoZ2g4cUxtUmxabUYxYkhRdWFIVmlZbXhsTFdkeWNHTXVZMmxzCmFYVnRMbWx2TUEwR0NTcUdTSWIzRFFFQkN3VUFBNElCQVFBOEhFUW41SFFFVDNJV2xGc1VOb0QrbitxMi8zUnIKSm5qU2FSVk8yL0pZVy9lcGs0by9kWWpENHlEWXhSYys3T2xIamU3ODVvT01DQ0pWeXF6TTJjTTF5Z1UvcnFzRApDd1BLVFJtOG9pN0xZL2JEYm4wUzdwM1lERTlSU1RIN1VyaWxucUVFdHYvWG9TRktYQjhwa255SnFjSWFkVW00CjllcFo0MmN6L1hhRkxhcVpqdHc2VXp1VU16eVdzRnBHTmhwc0FhNEYxZ2YvYUJ3aGdkYXFIc2RLekF1YmZCd2kKZ1A0andBNWkrWXpMWmVIeWtPdnh3TVRNdWx5WXppZG9rbjMycGovQlFHTVR6MnpRRDhRRDhwYmVtMjM3L1pTTgorZ3h2V3Rxc2tPZ0hxUXk1ditkalp3QXB0dEZGa2RaSUZUZzdHVk05VkpPNTBndDEvV2tTTFJLdAotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
-  tls.key: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBeCsxNTcwbDlkOC9YMmF5OUNQR29vanlGc0xvSDgrM2V1VCtLTDhmWS9OSkwyNHBCClJlUURseGpHQkhTWWNVSEM5MEYzTlE0dWRUQWxjRHJ0V2hHQ213U2I5WEp2c1lWZ0MxUGxkcVYrRXBkYnJwVkMKRmFuMm9XNnhZWWczbG9iRFJ6dE1aY3ZUazhSOXp3TnBxM0RmeTlJTmR6SytTTWM4Q1NCR2JTK0twbXMzRlloTwp2VFRnWGU0Rk1rcE9nSSt6Z2JLWkxnTnF4SjI2Ti9RaU1GMkhNTmxwWk91ZnRFNnlONGRzZm9yaGkwMFArMDBXCm9ZYnhpYytlZmZPR2RZeFVVeFNTMlZmTEc3Mk92RU1rRGNySG1BQmhZN0krU2xiS2dPeURqZDBqQVpXdE5HSkMKZVBnOUZOVU5DYkozU2NKQnEySUtYQnFCSzQxT2g0b3pVT2c4MFFJREFRQUJBb0lCQUFXR3l1cmpkVklxL0JwTgpZN2l4cVBjVXhPc1NuNFNvQUpMc3hXWTJqT05CYWNIdXN4Q1JCcDlTYll6QUovL3FwMnlxUVJ4NmZVTE4raDFRClRaTU41UWtIY010bURpa0JTOThNd3VzWXEyTER4QXdCRnVNK1hHKy9Na011WUtGWjZjazcrRzJqVzQrU29yZ0UKekF0QXpFQldRaWhFb1JhVzc4cEx1NXBxRUZmMjRVbzZ3S3BVWjJWMzFHR2c2TUhoZTZWK1RzRjd5bDBsWXVraApMVVFYNHFhUllEbG5VUldXZVpEZkYxN0xoWDJqSE9xaVFlMlNjNVBra0syZFdIY2VsMWlFakFqMEhDTWg2ZlZRCllkVmg4eXZxdkU3V0JLbzd5UURpK2E2VzIySFh4RHF4Ky9nYy9tY294NGhtNW0xeHFEL2xrUFJ3dElFZnhtdHoKNm51RmdzY0NnWUVBeWxiTG4rYU9BYUlBQU9PVzF2R2tZZFVQb1BKZFBMQUF1cFYrVk00TnBTVEZXMWJYRHZwQQppVjdQOVNwWkh5Qm13cGMxMnZ4SFI2T0JjRVplTE45bjdzS01HNEQyY3lLVHVzSUFGK04yR2hrUTR4QlUzUlRCCncyb0NJU3h0TFh0aHF6VWdkRGlKNUcwLzlZbFQ2QXZHNy9xa1hpQldkOHFUZm1JNitYMDBQcThDZ1lFQS9QTDMKUm1rK04vMVVIam9sSTFtNEtURTgzTitPNlFyNEJPMWxidkUrRmNMR3Mwazd6MGxobE56TDdpVXV0dEg0Z2RIUQpkUHFxdkI0Tmg0ZGlCS09hdUVZWk9oTWhXSzNJcC9vbHRYOGFEU0NyZVpDa3BEZVRhalBmNnVzdUh2SVNqSFVXCmZ1enRGamFLcnJreG9GQVVCbktUOXpmbklZVnh1YVV0UlUxK0hIOENnWUVBeVhaVU5uaVRxaEtIMkZyQzVHOGkKMGZvWEhwUlN1MHN1M3BoY2VjblVFanNqZWdka0I5aXFDMXpveUYySzhSQU00UEUzd1R0eEtXWW1TZ2oyV2MxegpLV3B4b0N6dXRjS1d2dHZNeGZ4SHFrS002dGhtOXQxazg5SUlIc21pUnlmVEhtbStUNW0veWozdzhlUHpORmNOCmxBSEdTS1lBRWpRVVdVRXJJU0JGdGFjQ2dZQmpTQTRNUWVTYzN6Nnorb2gzSHBEdEFobHNiQWJRcTNCN3BwNEkKZElHMDB0VmdxMTdoVm1FSnA3d1hSZHJYQVFUMEYyRWxlUG1vaW5jdStkRmNGc2IwaXZiOTEySmdSeDJaNk5JQwpNZGdNelFUZzJ3ZjBPS2dRcURtOElBRGpQb3BQUE9uT2VibjQzUUdENE1aOHNOR2JVaitIYWhhN0RvQjdxRHhqCmxpM29pd0tCZ1FDTWJUd1pyN0NRanZ5MTZVWXFtSmovd3FGRXRETjhkYnZyVHBMWG8vMFNTQTYzSU1ydUtlbUwKZmEwQUNPRk1JVzJDRVdaSlAzVkZ5ZXQzTjQrRU1pTUhuWnR3ckV5OE9BRFBlY2NNY1dQSStrMzkvYUtFS3lUcgpsOFhvZVQ3Zi9wZ0pmaSswNFlGNFp4TVNlL3lZWG81QnRJUWgvZjQ2TmJVeUhlV1FCd0U4K2c9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
 
 ---
 # Source: cilium/templates/cilium-configmap.yaml
@@ -247,16 +217,7 @@ data:
   synchronize-k8s-nodes: "true"
   operator-api-serve-addr: "127.0.0.1:9234"
 
-  enable-hubble: "true"
-  # UNIX domain socket for Hubble server to listen to.
-  hubble-socket-path: "/var/run/cilium/hubble.sock"
-  hubble-network-policy-correlation-enabled: "true"
-  # An additional address for Hubble server to listen to (e.g. ":4244").
-  hubble-listen-address: ":4244"
-  hubble-disable-tls: "false"
-  hubble-tls-cert-file: /var/lib/cilium/tls/hubble/server.crt
-  hubble-tls-key-file: /var/lib/cilium/tls/hubble/server.key
-  hubble-tls-client-ca-files: /var/lib/cilium/tls/hubble/client-ca.crt
+  enable-hubble: "false"
   ipam: "cluster-pool"
   ipam-cilium-node-update-rate: "15s"
   cluster-pool-ipv4-cidr: "__VKUBE_POD_SUBNET__"
@@ -925,29 +886,6 @@ subjects:
   namespace: kube-system
 
 ---
-# Source: cilium/templates/hubble/peer-service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: hubble-peer
-  namespace: kube-system
-  labels:
-    k8s-app: cilium
-    app.kubernetes.io/part-of: cilium
-    app.kubernetes.io/name: hubble-peer
-    helm.sh/chart: cilium-1.20.5
-
-spec:
-  selector:
-    k8s-app: cilium
-  ports:
-  - name: peer-service
-    port: 443
-    protocol: TCP
-    targetPort: 4244
-  internalTrafficPolicy: Local
-
----
 # Source: cilium/templates/cilium-agent/daemonset.yaml
 apiVersion: apps/v1
 kind: DaemonSet
@@ -1093,10 +1031,6 @@ spec:
           containerPort: 9879
           hostPort: 9879
           protocol: TCP
-        - name: peer-service
-          containerPort: 4244
-          hostPort: 4244
-          protocol: TCP
         securityContext:
           seLinuxOptions:
             level: s0
@@ -1151,9 +1085,6 @@ spec:
           readOnly: true
         - name: xtables-lock
           mountPath: /run/xtables.lock
-        - name: hubble-tls
-          mountPath: /var/lib/cilium/tls/hubble
-          readOnly: true
         - name: tmp
           mountPath: /tmp
         
@@ -1469,21 +1400,6 @@ spec:
         hostPath:
           path: /proc/sys/kernel
           type: Directory
-      - name: hubble-tls
-        projected:
-          # note: the leading zero means this number is in octal representation: do not remove it
-          defaultMode: 0400
-          sources:
-          - secret:
-              name: hubble-server-certs
-              optional: true
-              items:
-              - key: tls.crt
-                path: server.crt
-              - key: tls.key
-                path: server.key
-              - key: ca.crt
-                path: client-ca.crt
       
 
 ---

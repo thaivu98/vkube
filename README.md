@@ -27,11 +27,15 @@
 ## Tính năng nổi bật
 
 - **Cross-platform Deployer (100% Pure Go):** Chạy độc lập trên **Linux, macOS và Windows** (`amd64` & `arm64`), không cần cài Python, Ansible, Docker hay bất kỳ công cụ đặc thù nào của hệ điều hành.
-- **Multi-arch Target Nodes:** Hỗ trợ đồng thời cả **`linux/amd64` và `linux/arm64`** (Ubuntu 22.04 / 24.04 / 26.x). Tự động phát hiện OS/Arch của server đích một lần duy nhất ở bước `preflight` (`NodeFacts`) và hỗ trợ build chéo bundle qua cờ `--arch amd64|arm64`.
-- **Air-gapped First & BOM không hardcode:** Toàn bộ version, URL tải artifact và danh sách OCI images được quản lý tập trung trong file BOM [versions.yaml](pkg/versions/versions.yaml) (nhúng sẵn qua `//go:embed`) và có thể ghi đè ngay bằng cờ `--manifest <path>`.
+- **Multi-arch & Multi-OS Target Nodes:** Hỗ trợ đồng thời **`linux/amd64` và `linux/arm64`** trên **Ubuntu 22.04 / 24.04 / 26.x** và **Rocky Linux / AlmaLinux / RHEL 8–9** (tự cấu hình SELinux `permissive` và mở đúng port K8s/CNI trên `firewalld`).
+- **Air-gapped First & LAN HTTP Fan-out:** Toàn bộ version, URL tải artifact và danh sách OCI images được quản lý tập trung trong file BOM [versions.yaml](pkg/versions/versions.yaml) (mặc định **Kubernetes `v1.36.7`**, `containerd 2.4.2`, hỗ trợ ghi đè bằng `--manifest <path>`). Tự bật **LAN HTTP `BundleServer`** (`--fast-sync` hoặc cụm `>= 3` nodes) để phát tán Offline Bundle cực nhanh trong LAN và tự fallback sang SFTP nếu bị firewall chặn.
+- **Lựa chọn CNI linh hoạt (Calico & Cilium eBPF):** Hỗ trợ cả **Calico** (mặc định) và **Cilium eBPF** (`spec.networking.cni: cilium`, kèm tùy chọn `kubeProxyReplacement: true` chạy không cần `kube-proxy`), đóng gói sẵn trong Offline Bundle.
 - **HA Control Plane & Bảo vệ CP mặc định:** Tự động dựng Stacked `etcd` HA + **`kube-vip`** (static pod ARP L2, kiểm tra chống trùng IP VIP trong LAN), giữ chặt taint `NoSchedule` bảo vệ Control Plane khỏi workload ứng dụng.
+- **Vận hành Day-2 tích hợp sẵn:**
+  - **Scale cụm (`vkube add-node` / `vkube remove-node`):** Thêm Worker/Control Plane vào cụm đang chạy; drain, gỡ `etcd` member (nếu là CP), xóa node và reset máy đích an toàn.
+  - **Backup & Restore `etcd` đa đích (`vkube backup` / `vkube restore`):** Chụp snapshot `etcd` (có verify) + `/etc/kubernetes/pki/`, hỗ trợ đẩy thẳng về **Local**, **S3 / MinIO / Ceph RGW** (Pure Go AWS SigV4), hoặc **SFTP / NAS**; hỗ trợ khôi phục cụm 1-node & 3-node HA chống split-brain.
 - **Modular Core Addons & Private Registry:**
-  - Bật/tắt linh hoạt trong `cluster.yaml` (cài 100% offline từ bundle): **Metrics Server** (HPA / `kubectl top`), **Local Path Provisioner** (Default StorageClass), **MetalLB** (L2 LoadBalancer), **Kong Ingress Controller** (DB-less API Gateway) và **`customManifests`** tùy chọn.
+  - Bật/tắt linh hoạt trong `cluster.yaml` (cài 100% offline từ bundle): **Metrics Server** (HPA / `kubectl top`), **Local Path Provisioner** (Default StorageClass), **MetalLB** (L2 LoadBalancer), **Kong Ingress Controller v3.x** (DB-less API Gateway) và **`customManifests`** tùy chọn.
   - Hỗ trợ khai báo **Private Registry / Harbor nội bộ** (`spec.registry.mirrors`) tự động sinh `/etc/containerd/certs.d/<host>/hosts.toml`.
 
 ---
@@ -83,7 +87,7 @@ git clone https://github.com/thaivu98/vkube.git && cd vkube
 
 ### Yêu cầu trên các Server đích (Target Nodes)
 
-- Hệ điều hành: **Ubuntu 22.04 / 24.04 / 26.x** (`amd64` hoặc `arm64`).
+- Hệ điều hành: **Ubuntu 22.04 / 24.04 / 26.x** hoặc **Rocky Linux / AlmaLinux / RHEL 8–9** (`amd64` hoặc `arm64`).
 - Tài nguyên tối thiểu: **2 vCPU, 2 GB RAM, 20 GB Disk** cho Control Plane.
 - Đã bật **SSH** và có user quyền `sudo` (hỗ trợ SSH Key hoặc Password).
 - **Không cần kết nối Internet** trên các server đích.
@@ -126,6 +130,66 @@ kubectl --kubeconfig kubeconfig-my-cluster.yaml get nodes,pods -A
 
 ---
 
+## Vận hành Day-2: Scale cụm & Backup/Restore `etcd`
+
+### 1. Thêm / Gỡ Node trên cụm đang chạy (`add-node` / `remove-node`)
+
+```bash
+# Sau khi bổ sung node mới vào danh sách spec.nodes trong cluster.yaml:
+vkube add-node -f cluster.yaml                              # Tự phát hiện và thêm mọi node mới (Online)
+vkube add-node -f cluster.yaml --node worker-3 --bundle bundle.tar.zst  # Thêm 1 node cụ thể (Air-gapped)
+
+# Drain workload, gỡ etcd member (nếu là CP), xóa khỏi API và reset máy đích an toàn:
+vkube remove-node -f cluster.yaml --node worker-3 --yes
+vkube remove-node -f cluster.yaml --node worker-3 --skip-reset --yes    # Nếu máy đích đã hỏng phần cứng
+```
+
+### 2. Sao lưu & Khôi phục `etcd` + PKI đa đích (`local`, `s3`, `sftp`)
+
+`vkube backup` chụp snapshot `etcd` (xác thực tính toàn vẹn bằng `etcdutl`/`etcdctl snapshot status`), đóng gói kèm `/etc/kubernetes/pki/` & `admin.conf`, rồi đẩy thẳng về đích lưu trữ bạn chọn trong `spec.backup` của `cluster.yaml` hoặc ghi đè trực tiếp qua cờ CLI:
+
+- **Lưu về S3 / MinIO / Ceph RGW (AWS SigV4 Pure Go):**
+  ```yaml
+  spec:
+    backup:
+      target: s3
+      s3:
+        endpoint: https://minio.internal:9000
+        bucket: k8s-etcd-backups
+        prefix: vkube/prod-ha
+        region: us-east-1
+        # Khuyên dùng biến môi trường VKUBE_S3_ACCESS_KEY & VKUBE_S3_SECRET_KEY thay vì ghi plaintext
+        insecureSkipVerify: false   # Bật true cho MinIO nội bộ dùng TLS self-signed
+  ```
+  ```bash
+  VKUBE_S3_ACCESS_KEY=minioadmin VKUBE_S3_SECRET_KEY=secret vkube backup -f cluster.yaml
+  # Hoặc ghi đè bằng cờ CLI:
+  VKUBE_S3_ACCESS_KEY=minioadmin VKUBE_S3_SECRET_KEY=secret \
+    vkube backup -f cluster.yaml --target s3 \
+    --s3-endpoint https://minio.internal:9000 --s3-bucket k8s-etcd-backups --s3-prefix prod-ha --s3-insecure
+  ```
+
+- **Lưu sang NAS / Backup Server từ xa qua SFTP:**
+  ```bash
+  vkube backup -f cluster.yaml --target sftp \
+    --sftp-host 192.0.2.50 --sftp-user backup --sftp-key ~/.ssh/id_ed25519 --sftp-dir /data/backups/k8s
+  ```
+
+- **Lưu về máy Deployer (`local`, mặc định) hoặc thư mục đã mount NFS/SMB:**
+  ```bash
+  vkube backup -f cluster.yaml -o ./backups/prod-ha.tar.gz
+  ```
+
+- **Khôi phục cụm 1-node hoặc 3-node HA chống split-brain (`vkube restore`):**
+  ```bash
+  # Khôi phục trực tiếp từ S3 / MinIO, SFTP / NAS hoặc file cục bộ:
+  vkube restore -f cluster.yaml --backup s3://k8s-etcd-backups/prod-ha/backup-prod-ha-20261127.tar.gz --yes
+  vkube restore -f cluster.yaml --backup sftp://backup@192.0.2.50/data/backups/k8s/backup-prod-ha-20261127.tar.gz --yes
+  vkube restore -f cluster.yaml --backup ./backups/prod-ha.tar.gz --yes
+  ```
+
+---
+
 ## Tùy chỉnh phiên bản bằng `--manifest` (Không cần build lại `vkube`)
 
 ```bash
@@ -145,9 +209,13 @@ vkube bundle build --arch amd64 --manifest my-versions.yaml
 | `vkube bundle build [--arch amd64\|arm64] [--manifest file] [--dry-run]` | Đóng gói Offline Bundle `.tar.zst` (100% Pure Go, không cần Docker)  |
 | `vkube bundle verify <bundle.tar.zst>`                                   | Xác thực toàn bộ SHA256 checksum & metadata của Offline Bundle       |
 | `vkube bundle export-manifest [-o versions.yaml]`                        | Xuất file BOM mặc định để tùy chỉnh                                  |
-| `vkube apply -f <cluster.yaml> --bundle <file.tar.zst>`                  | Triển khai cụm Kubernetes + Core Addons + xuất `kubeconfig`          |
-| `vkube status -f <cluster.yaml>`                                         | Xem trạng thái Nodes, Pods, StorageClasses, LoadBalancer & Metrics   |
-| `vkube reset -f <cluster.yaml> --yes`                                    | Gỡ bỏ cụm (`kubeadm reset`) và dọn sạch cấu hình trên toàn bộ nodes  |
+| `vkube apply -f <cluster.yaml> [--bundle <file.tar.zst>] [--fast-sync]`  | Triển khai cụm Kubernetes (Calico/Cilium) + Core Addons + `kubeconfig` |
+| `vkube status -f <cluster.yaml>`                                         | Xem trạng thái Nodes, Pods, StorageClasses, LoadBalancer & Metrics     |
+| `vkube add-node -f <cluster.yaml> [--node <name>] [--bundle <file>]`     | Thêm Worker / Control Plane mới vào cụm đang chạy                      |
+| `vkube remove-node -f <cluster.yaml> --node <name> --yes`                | Drain, gỡ `etcd` member (nếu CP), xóa node và reset máy an toàn        |
+| `vkube backup -f <cluster.yaml> [--target local\|s3\|sftp]`              | Snapshot `etcd` (có verify) + PKI và đẩy về Local / S3-MinIO / SFTP    |
+| `vkube restore -f <cluster.yaml> --backup <path\|s3://\|sftp://> --yes`  | Khôi phục `etcd` & PKI cho cụm 1-node / 3-node HA chống split-brain    |
+| `vkube reset -f <cluster.yaml> --yes`                                    | Gỡ bỏ cụm (`kubeadm reset`) và dọn sạch cấu hình trên toàn bộ nodes    |
 
 ## Build đa nền tảng (Cross-compile)
 
