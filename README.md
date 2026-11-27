@@ -255,6 +255,8 @@ Tag phát hành của `vkube` bám sát phiên bản Kubernetes theo định d�
 ## Tài liệu dự án
 
 - [Kiến trúc hệ thống (Architecture)](docs/ARCHITECTURE.md)
+- [Hướng dẫn Vận hành Production &amp; Xác thực Cosign/SBOM](docs/PRODUCTION.md)
+- [Golden Image (Packer) — VMware &amp; Proxmox](packer/README.md)
 - [Kế hoạch phát triển &amp; Trạng thái hiện tại (Plan)](docs/PLAN.md)
 - [Hướng dẫn dựng Lab kiểm thử](lab/README.md)
 - [File mẫu cấu hình cụm (Cluster Template)](clusters/cluster_template.yaml)

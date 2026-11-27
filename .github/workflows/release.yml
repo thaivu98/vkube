@@ -7,10 +7,11 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-and-release:
-    name: Build Multi-arch Binaries & Publish Release
+    name: Build, SBOM, Cosign & Publish Release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -21,10 +22,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run unit tests
-        run: go test -race ./...
+      - name: Run go vet & unit tests (race detector)
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
 
-      - name: Cross-compile all 6 platforms
+      - name: Cross-compile all 6 platforms & generate SHA256SUMS
         env:
           VERSION: ${{ github.ref_name }}
         run: |
@@ -33,6 +36,28 @@ jobs:
           sha256sum vkube-* > SHA256SUMS
           ls -lh
 
+      - name: Generate SPDX SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/vkube-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+
+      - name: Install Cosign (Sigstore)
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign SHA256SUMS & SBOM with Cosign (Keyless OIDC)
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cosign sign-blob --yes \
+            --bundle dist/SHA256SUMS.sigstore.json \
+            dist/SHA256SUMS
+          cosign sign-blob --yes \
+            --bundle "dist/vkube-${VERSION}.spdx.json.sigstore.json" \
+            "dist/vkube-${VERSION}.spdx.json"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -40,3 +65,6 @@ jobs:
           files: |
             dist/vkube-*
             dist/SHA256SUMS
+            dist/SHA256SUMS.sigstore.json
+            dist/vkube-*.spdx.json
+            dist/vkube-*.spdx.json.sigstore.json

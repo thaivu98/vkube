@@ -1,10 +1,11 @@
 # Kế hoạch phát triển `vkube` (v0.1 → v1.0)
 
 ## Current Status / Handover
-- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v0.5)
-- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **Phase 8 (v0.4 — Golden Image Packer)** & **Phase 9 (v0.5 — `vkube upgrade` & DevSecOps Hardening)** — Chỉ còn **Phase 10 (v1.0 — Task 23 Cosign & SBOM)**
-- **Task đang thực hiện:** Đã hoàn thành toàn bộ Phase 8 & Phase 9
+- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1` (v1.0-ready)
+- **Giai đoạn hiện tại:** **HOÀN TẤT 100% TOÀN BỘ ROADMAP (Phase 0 → Phase 10 / Tasks 0.1 → 23)** — Sẵn sàng kiểm tra chéo, chạy E2E v1.0 và phát hành release chính thức!
+- **Task đang thực hiện:** Đã hoàn tất toàn bộ 23 Tasks
 - **Vừa hoàn thành:**
+  - **Task 23 (Supply Chain Security — Cosign, SBOM, CI & Production Guide):** Tích hợp ký keyless OIDC bằng **Cosign (Sigstore)** cho `SHA256SUMS` & **SPDX SBOM (Syft)** trong `.github/workflows/release.yml`, bổ sung `.github/workflows/ci.yml` (`gofmt`, `go vet`, `go test -race`, cross-compile 6 nền tảng) và viết cẩm nang vận hành Production tại `docs/PRODUCTION.md`.
   - **Task 22 (`vkube upgrade` & DevSecOps Hardening):** Rolling upgrade không downtime tuần tự từng node (`CP-1` → Secondary CPs → Workers, hỗ trợ cả Online & Air-gapped `--bundle`, chặn downgrade/nhảy >1 minor); kiểm tra đồng bộ giờ **NTP/`chrony`** trong `preflight`; tùy chọn **`metricsServer.secureTLS`** dùng `kubelet serverTLSBootstrap` (tự duyệt CSR, bỏ `--kubelet-insecure-tls`); và chế độ **`spec.controlPlane.cisHardening: true`** (tự bật `encryptSecrets`, audit log, tắt profiling, `readOnlyPort: 0`, siết quyền file `0600`/`0700`).
   - **Task 21 (Golden Image Packer — VMware & QEMU/Proxmox):** Tạo bộ template Packer tại `packer/` (`vmware-ubuntu.pkr.hcl`, `qemu-proxmox.pkr.hcl`, `scripts/bake-vkube-node.sh`, `packer/README.md`) và bổ sung fast-path nhận diện `/etc/vkube-golden-image` (`RELEASE_TAG`) trong `pkg/engine/runtime.go` để bỏ qua tải/nạp artifact.
   - **Task 20 (Tùy biến `extraArgs`, Encryption at Rest & BGP Mode):** Hỗ trợ `spec.controlPlane.{apiServerExtraArgs,controllerManagerExtraArgs,schedulerExtraArgs,kubeletExtraArgs}` chuẩn `kubeadm v1beta4`, tự sinh & phân phối khóa AES-CBC `/etc/kubernetes/enc/encryption-config.yaml` (`0600`) khi bật `encryptSecrets: true`, và bổ sung chế độ **BGP** cho cả `kube-vip` (`spec.vipBGP`) lẫn MetalLB (`spec.addons.metalLB.bgp`).
@@ -108,4 +109,4 @@
 ---
 
 ## Phase 10 (v1.0): Production-ready & Supply Chain Security
-- [ ] **Task 23 — Ký Artifact (Cosign) & SBOM:** Tích hợp ký binary & Offline Bundle bằng Cosign, tự động sinh SBOM (Syft/SPDX) trong GitHub Actions release, hoàn thiện tài liệu vận hành Production.
+- [x] **Task 23 — Ký Artifact (Cosign) & SBOM:** Tích hợp ký binary & Offline Bundle bằng Cosign, tự động sinh SBOM (Syft/SPDX) trong GitHub Actions release, hoàn thiện tài liệu vận hành Production.
