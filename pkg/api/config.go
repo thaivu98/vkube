@@ -167,14 +167,21 @@ func (c *ClusterConfig) Validate() error {
 		}
 
 		for k, v := range n.Labels {
-			if !safeShellTokenRe.MatchString(k) || !safeShellTokenRe.MatchString(v) {
+			if !safeShellTokenRe.MatchString(k) {
+				errs = append(errs, fmt.Sprintf("%s.labels[%q] has invalid key", prefix, k))
+			}
+			// Giá trị label rỗng (ví dụ node-role.kubernetes.io/worker: "") là hợp lệ chuẩn Kubernetes.
+			if v != "" && !safeShellTokenRe.MatchString(v) {
 				errs = append(errs, fmt.Sprintf("%s.labels[%q]=%q contains invalid characters", prefix, k, v))
 			}
 		}
 
 		for j, taint := range n.Taints {
-			if strings.TrimSpace(taint.Key) == "" {
-				errs = append(errs, fmt.Sprintf("%s.taints[%d].key is required", prefix, j))
+			if strings.TrimSpace(taint.Key) == "" || !safeShellTokenRe.MatchString(taint.Key) {
+				errs = append(errs, fmt.Sprintf("%s.taints[%d].key %q is required and must contain only valid characters", prefix, j, taint.Key))
+			}
+			if taint.Value != "" && !safeShellTokenRe.MatchString(taint.Value) {
+				errs = append(errs, fmt.Sprintf("%s.taints[%d].value %q contains invalid characters", prefix, j, taint.Value))
 			}
 			switch taint.Effect {
 			case TaintEffectNoSchedule, TaintEffectPreferNoSchedule, TaintEffectNoExecute:

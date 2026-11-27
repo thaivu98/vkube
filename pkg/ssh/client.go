@@ -45,17 +45,23 @@ type Runner interface {
 
 // Client là cài đặt Pure Go của Runner sử dụng golang.org/x/crypto/ssh và pkg/sftp.
 type Client struct {
-	nodeName string
-	host     string
-	cfg      api.SSHConfig
-	conn     *gossh.Client
+	nodeName  string
+	host      string
+	cfg       api.SSHConfig
+	conn      *gossh.Client
+	agentConn io.Closer
 }
 
-// Dial kết nối SSH tới một Target Node bằng Pure Go (hỗ trợ cả Private Key và Password).
+// Dial kết nối SSH tới một Target Node bằng Pure Go (hỗ trợ Private Key, ssh-agent và Password).
 func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Client, error) {
-	authMethods, err := buildAuthMethods(sshCfg)
+	authMethods, agentConn, err := buildAuthMethods(sshCfg)
 	if err != nil {
 		return nil, fmt.Errorf("node %s (%s): %w", nodeName, host, err)
+	}
+	closeAgent := func() {
+		if agentConn != nil {
+			_ = agentConn.Close()
+		}
 	}
 
 	port := sshCfg.Port
@@ -66,6 +72,7 @@ func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Cl
 
 	hostKeyCB, err := buildHostKeyCallback(sshCfg)
 	if err != nil {
+		closeAgent()
 		return nil, fmt.Errorf("node %s (%s): %w", nodeName, host, err)
 	}
 
@@ -79,20 +86,23 @@ func Dial(ctx context.Context, nodeName, host string, sshCfg api.SSHConfig) (*Cl
 	dialer := &net.Dialer{Timeout: defaultDialTimeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
+		closeAgent()
 		return nil, fmt.Errorf("ssh tcp dial %s (%s): %w", nodeName, addr, err)
 	}
 
 	c, chans, reqs, err := gossh.NewClientConn(rawConn, addr, clientCfg)
 	if err != nil {
 		_ = rawConn.Close()
+		closeAgent()
 		return nil, fmt.Errorf("ssh handshake %s (%s): %w", nodeName, addr, err)
 	}
 
 	return &Client{
-		nodeName: nodeName,
-		host:     host,
-		cfg:      sshCfg,
-		conn:     gossh.NewClient(c, chans, reqs),
+		nodeName:  nodeName,
+		host:      host,
+		cfg:       sshCfg,
+		conn:      gossh.NewClient(c, chans, reqs),
+		agentConn: agentConn,
 	}, nil
 }
 
@@ -100,6 +110,10 @@ func (c *Client) NodeName() string { return c.nodeName }
 func (c *Client) Host() string     { return c.host }
 
 func (c *Client) Close() error {
+	if c.agentConn != nil {
+		_ = c.agentConn.Close()
+		c.agentConn = nil
+	}
 	if c.conn != nil {
 		return c.conn.Close()
 	}
@@ -270,7 +284,8 @@ func buildHostKeyCallback(cfg api.SSHConfig) (gossh.HostKeyCallback, error) {
 		}
 		var keyErr *knownhosts.KeyError
 		if errors.As(err, &keyErr) && len(keyErr.Want) == 0 {
-			// Host chưa từng thấy -> TOFU: ghi nhận vào known_hosts
+			// Host chưa từng thấy -> TOFU: in fingerprint và ghi nhận vào known_hosts
+			fmt.Fprintf(os.Stderr, "[ssh-tofu] Trusting new host key for %s (%s)\n", hostname, gossh.FingerprintSHA256(key))
 			line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
 			af, openErr := os.OpenFile(khPath, os.O_APPEND|os.O_WRONLY, 0o600)
 			if openErr != nil {
@@ -284,25 +299,21 @@ func buildHostKeyCallback(cfg api.SSHConfig) (gossh.HostKeyCallback, error) {
 	}, nil
 }
 
-func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
-	var methods []gossh.AuthMethod
+func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, io.Closer, error) {
+	var (
+		methods   []gossh.AuthMethod
+		agentConn io.Closer
+	)
 
-	// 1. Hỗ trợ ssh-agent qua biến môi trường SSH_AUTH_SOCK (nếu đang chạy)
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if agentConn, err := net.DialTimeout("unix", sock, 2*time.Second); err == nil {
-			methods = append(methods, gossh.PublicKeysCallback(agent.NewClient(agentConn).Signers))
-		}
-	}
-
-	// 2. Private Key (hỗ trợ cả key không passphrase lẫn có passphrase)
+	// 1. Ưu tiên Private Key chỉ định tường minh trước ssh-agent để tránh lỗi "Too many authentication failures"
 	if cfg.PrivateKeyPath != "" {
 		keyPath, err := expandHomePath(cfg.PrivateKeyPath)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		keyBytes, err := os.ReadFile(keyPath)
 		if err != nil {
-			return nil, fmt.Errorf("read ssh private key %q: %w", keyPath, err)
+			return nil, nil, fmt.Errorf("read ssh private key %q: %w", keyPath, err)
 		}
 		var signer gossh.Signer
 		if cfg.PrivateKeyPassphrase != "" {
@@ -311,9 +322,17 @@ func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
 			signer, err = gossh.ParsePrivateKey(keyBytes)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("parse ssh private key %q: %w", keyPath, err)
+			return nil, nil, fmt.Errorf("parse ssh private key %q: %w", keyPath, err)
 		}
 		methods = append(methods, gossh.PublicKeys(signer))
+	}
+
+	// 2. Hỗ trợ ssh-agent qua biến môi trường SSH_AUTH_SOCK (đóng fd khi Client.Close())
+	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
+		if conn, err := net.DialTimeout("unix", sock, 2*time.Second); err == nil {
+			agentConn = conn
+			methods = append(methods, gossh.PublicKeysCallback(agent.NewClient(conn).Signers))
+		}
 	}
 
 	// 3. Password & KeyboardInteractive
@@ -331,9 +350,12 @@ func buildAuthMethods(cfg api.SSHConfig) ([]gossh.AuthMethod, error) {
 	}
 
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("no SSH auth method configured (provide privateKeyPath, password, or SSH_AUTH_SOCK)")
+		if agentConn != nil {
+			_ = agentConn.Close()
+		}
+		return nil, nil, fmt.Errorf("no SSH auth method configured (provide privateKeyPath, password, or SSH_AUTH_SOCK)")
 	}
-	return methods, nil
+	return methods, agentConn, nil
 }
 
 // expandHomePath mở rộng tiền tố "~/" thành thư mục Home hiện tại (chạy chuẩn trên Linux/macOS/Windows).

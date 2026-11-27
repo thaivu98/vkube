@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"strings"
@@ -113,8 +114,8 @@ install -m 0644 "$STAGE_TMP/10-kubeadm.conf" /etc/systemd/system/kubelet.service
 install -m 0644 "$STAGE_TMP/crictl.yaml" /etc/crictl.yaml
 rm -rf "$STAGE_TMP"
 
-# Gắn cứng --node-ip cho kubelet để máy nhiều card mạng luôn đăng ký đúng IP khai báo trong cluster.yaml
-printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet
+# Chỉ gắn --node-ip khi host là địa chỉ IP thực (nếu host là DNS nội bộ thì để kubelet tự phân giải)
+%s
 
 /usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
@@ -141,7 +142,7 @@ rm -rf %s
 			remoteWorkDir, remoteWorkDir,
 			remoteWorkDir, remoteWorkDir, remoteManifestDir,
 			remoteWorkDir, remoteWorkDir, remoteImageDir,
-			node.Host,
+			kubeletExtraArgsCmd(node.Host),
 			sandboxImage,
 			remoteImageDir,
 			remoteWorkDir,
@@ -192,6 +193,14 @@ func decompressZstdToTempTar(zstPath string) (string, error) {
 		return "", err
 	}
 	return outPath, nil
+}
+
+// kubeletExtraArgsCmd chỉ sinh dòng cấu hình --node-ip khi host là IP hợp lệ (tránh lỗi kubelet nếu host là tên DNS).
+func kubeletExtraArgsCmd(host string) string {
+	if net.ParseIP(strings.TrimSpace(host)) != nil {
+		return fmt.Sprintf(`printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet`, strings.TrimSpace(host))
+	}
+	return "rm -f /etc/default/kubelet"
 }
 
 // runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node,
@@ -286,8 +295,8 @@ install -m 0644 "$STAGE_TMP/10-kubeadm.conf" /etc/systemd/system/kubelet.service
 install -m 0644 "$STAGE_TMP/crictl.yaml" /etc/crictl.yaml
 rm -rf "$STAGE_TMP"
 
-# Gắn cứng --node-ip cho kubelet để máy nhiều card mạng luôn đăng ký đúng IP khai báo trong cluster.yaml
-printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet
+# Chỉ gắn --node-ip khi host là địa chỉ IP thực (nếu host là DNS nội bộ thì để kubelet tự phân giải)
+%s
 
 /usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
@@ -296,7 +305,7 @@ sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/conta
 
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, node.Host, sandboxImage))
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host), sandboxImage))
 
 		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries, verify SHA256 & cài containerd/kubelet...\n", node.Name)
 		if _, err := r.RunSudo(ctx, strings.Join(dlCmds, "\n")); err != nil {

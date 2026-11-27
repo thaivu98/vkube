@@ -79,11 +79,11 @@ if command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev
   iptables-save | grep -vE '(KUBE-|cali-|FELIX-)' | iptables-restore || true
 fi
 
-# Dọn các interface mạng ảo còn sót của Calico/CNI
+# Dọn các interface mạng ảo còn sót của Calico/CNI (cắt hậu tố @ifN từ ip -o link)
 for iface in tunl0 vxlan.calico cni0 flannel.1; do
   ip link delete "$iface" 2>/dev/null || true
 done
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -E '^cali' || true); do
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep -E '^cali' || true); do
   ip link delete "$iface" 2>/dev/null || true
 done
 

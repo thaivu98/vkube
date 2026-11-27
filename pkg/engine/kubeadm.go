@@ -319,15 +319,19 @@ func (e *Engine) runCalicoAndPostConfig(ctx context.Context, state *ClusterState
 		return err
 	}
 
-	// Apply Calico manifest và ép CALICO_IPV4POOL_CIDR trực tiếp bằng kubectl set env (tránh lỗi sed âm thầm khi đổi version)
+	// Patch Calico manifest và xác minh bằng grep rằng PodSubnet đã được ghi đúng trước khi apply (tránh fallback âm thầm về 192.168.0.0/16)
 	calicoScript := fmt.Sprintf(`set -euo pipefail
 CALICO_FILE="%s/calico.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$CALICO_FILE"
 sed -i 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|g' "$CALICO_FILE"
 sed -i 's|#   value: "192.168.0.0/16"|  value: "%s"|g' "$CALICO_FILE"
+if ! grep -qF 'value: "%s"' "$CALICO_FILE"; then
+  echo "ERROR: failed to patch CALICO_IPV4POOL_CIDR=%s into $CALICO_FILE" >&2
+  exit 1
+fi
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$CALICO_FILE"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system set env daemonset/calico-node CALICO_IPV4POOL_CIDR=%q
-`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
+`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
 
 	if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
 		return fmt.Errorf("apply offline Calico CNI: %w", err)

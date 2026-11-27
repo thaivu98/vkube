@@ -52,13 +52,19 @@ fi
 	// 2. Local Path Provisioner (StorageClass mặc định cho PVC động)
 	if addons.LocalPathStorage.Enabled {
 		fmt.Fprintf(e.Out, "  [addon]     local-path-provisioner (Default StorageClass)...\n")
+		busyboxVer := state.BundleManifest.Components["busybox"]
+		busyboxPatch := ""
+		if busyboxVer != "" {
+			busyboxPatch = fmt.Sprintf(`sed -i -E 's|(image:[[:space:]]*)busybox([[:space:]]*)$|\1busybox:%s\2|g' "$F"`, busyboxVer)
+		}
 		script := fmt.Sprintf(`set -euo pipefail
 F="%s/local-path-storage.yaml"
 sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
+%s
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$F"
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf patch storageclass local-path \
   -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-`, remoteManifestDir)
+`, remoteManifestDir, busyboxPatch)
 		if _, err := cp1Runner.RunSudo(ctx, script); err != nil {
 			return fmt.Errorf("install local-path-provisioner addon: %w", err)
 		}

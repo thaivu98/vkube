@@ -82,19 +82,19 @@ func (e *Engine) RunPreflight(ctx context.Context, state *ClusterState) error {
 		}
 	}
 
-	// Kiểm tra trên Primary Control Plane: cụm chưa tồn tại & các port bắt buộc (6443, 2379, 2380, 10250) còn trống.
-	cp1 := state.Config.ControlPlanes()[0]
-	cp1Runner, err := state.Pool.Get(cp1.Name)
-	if err != nil {
-		return err
-	}
-	cpCheckScript := `set -euo pipefail
-if [ -f /etc/kubernetes/admin.conf ]; then
+	// Kiểm tra trên toàn bộ nodes: chưa cài cụm & các port bắt buộc còn trống (CP: 6443/2379/2380/10250, Worker: 10250).
+	if err := state.Pool.RunParallel(ctx, state.Config.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
+		ports := "10250"
+		if node.Role == api.RoleControlPlane {
+			ports = "6443 2379 2380 10250"
+		}
+		checkScript := fmt.Sprintf(`set -euo pipefail
+if [ -f /etc/kubernetes/kubelet.conf ] || [ -f /etc/kubernetes/admin.conf ]; then
   echo "ERR:CLUSTER_EXISTS"
   exit 0
 fi
 if command -v ss >/dev/null 2>&1; then
-  for p in 6443 2379 2380 10250; do
+  for p in %s; do
     if ss -lnt "( sport = :$p )" 2>/dev/null | grep -q ":$p"; then
       echo "ERR:PORT_IN_USE:$p"
       exit 0
@@ -102,27 +102,38 @@ if command -v ss >/dev/null 2>&1; then
   done
 fi
 echo "OK"
-`
-	if cpRes, err := cp1Runner.RunSudo(ctx, cpCheckScript); err == nil {
-		out := strings.TrimSpace(cpRes.Stdout)
-		if out == "ERR:CLUSTER_EXISTS" {
-			return fmt.Errorf("Kubernetes cluster appears to be already initialized on %s (/etc/kubernetes/admin.conf exists); run 'vkube reset' before re-applying", cp1.Name)
+`, ports)
+		if res, err := r.RunSudo(ctx, checkScript); err == nil {
+			out := strings.TrimSpace(res.Stdout)
+			if out == "ERR:CLUSTER_EXISTS" {
+				return fmt.Errorf("node appears to already belong to a Kubernetes cluster (/etc/kubernetes/kubelet.conf or admin.conf exists); run 'vkube reset' first")
+			}
+			if strings.HasPrefix(out, "ERR:PORT_IN_USE:") {
+				return fmt.Errorf("required port %s is already in use", strings.TrimPrefix(out, "ERR:PORT_IN_USE:"))
+			}
 		}
-		if strings.HasPrefix(out, "ERR:PORT_IN_USE:") {
-			port := strings.TrimPrefix(out, "ERR:PORT_IN_USE:")
-			return fmt.Errorf("required control-plane port %s is already in use on %s", port, cp1.Name)
-		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	// Kiểm tra chống trùng IP VIP trên mạng LAN thực tế từ Primary Control Plane (ưu tiên arping -D, fallback ping).
+	// Kiểm tra chống trùng IP VIP trên mạng LAN thực tế từ Primary Control Plane.
+	cp1 := state.Config.ControlPlanes()[0]
+	cp1Runner, err := state.Pool.Get(cp1.Name)
+	if err != nil {
+		return err
+	}
 	if state.Config.Spec.VIP != "" {
 		iface := state.Config.Spec.VIPInterface
 		if iface == "" && state.Facts[cp1.Name] != nil {
 			iface = state.Facts[cp1.Name].DefaultInterface
 		}
 		fmt.Fprintf(e.Out, "  [preflight] Kiểm tra VIP %s chưa bị thiết bị nào khác chiếm dụng trong LAN...\n", state.Config.Spec.VIP)
-		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && [ -n %q ]; then
-  arping -D -I %q -c 2 -w 2 %s >/dev/null 2>&1 && echo FREE || echo IN_USE
+		// Chỉ dùng iputils arping -D khi xác nhận đúng bản hỗ trợ cờ -D; các trường hợp khác fallback ping an toàn.
+		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && arping -h 2>&1 | grep -q -- '-D' && [ -n %q ]; then
+  arping -D -I %q -c 2 -w 2 %s >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" -eq 1 ]; then echo IN_USE; else echo FREE; fi
 else
   ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE
 fi`, iface, iface, state.Config.Spec.VIP, state.Config.Spec.VIP)

@@ -66,6 +66,32 @@ spec:
 	}
 }
 
+func TestParseClusterConfig_EmptyLabelValueAndDNSHost(t *testing.T) {
+	raw := `
+spec:
+  arch: auto
+  ssh:
+    password: "test-pass"
+  nodes:
+    - name: cp-1
+      host: cp-1.internal.local
+      role: control-plane
+    - name: worker-1
+      host: worker-1.internal.local
+      role: worker
+      labels:
+        node-role.kubernetes.io/worker: ""
+        zone: rack-a
+`
+	cfg, err := ParseClusterConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("expected valid config with empty label value and DNS host, got error: %v", err)
+	}
+	if _, ok := cfg.Workers()[0].Labels["node-role.kubernetes.io/worker"]; !ok {
+		t.Fatalf("expected empty-value label to be preserved")
+	}
+}
+
 func TestParseClusterConfig_ValidHA(t *testing.T) {
 	raw := `
 apiVersion: vkube.io/v1alpha1
