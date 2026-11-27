@@ -322,3 +322,69 @@ spec:
 		t.Fatalf("unexpected networking config: %+v", cfg.Spec.Networking)
 	}
 }
+
+func TestParseClusterConfig_BackupTargets(t *testing.T) {
+	validS3 := `
+metadata:
+  name: prod-s3
+spec:
+  arch: arm64
+  backup:
+    target: s3
+    s3:
+      endpoint: https://minio.internal:9000
+      bucket: k8s-backups
+      prefix: vkube/prod
+      accessKey: minioadmin
+      secretKey: supersecret
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`
+	cfg, err := ParseClusterConfig([]byte(validS3))
+	if err != nil {
+		t.Fatalf("expected valid S3 backup config, got: %v", err)
+	}
+	if cfg.Spec.Backup.Target != BackupTargetS3 || cfg.Spec.Backup.S3.Region != "us-east-1" {
+		t.Fatalf("unexpected S3 backup defaults: %+v", cfg.Spec.Backup)
+	}
+
+	validSFTP := `
+metadata:
+  name: prod-sftp
+spec:
+  arch: arm64
+  backup:
+    target: sftp
+    sftp:
+      host: 10.0.0.50
+      user: backup
+      password: sftp-secret
+      remoteDir: /data/backups
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`
+	cfgSFTP, err := ParseClusterConfig([]byte(validSFTP))
+	if err != nil {
+		t.Fatalf("expected valid SFTP backup config, got: %v", err)
+	}
+	if cfgSFTP.Spec.Backup.SFTP.Port != 22 {
+		t.Fatalf("expected default SFTP port 22, got %d", cfgSFTP.Spec.Backup.SFTP.Port)
+	}
+
+	badS3 := `
+spec:
+  arch: arm64
+  backup:
+    target: s3
+    s3:
+      bucket: only-bucket
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: 10.0.0.1, role: control-plane }
+`
+	if _, err := ParseClusterConfig([]byte(badS3)); err == nil || !strings.Contains(err.Error(), "spec.backup.s3.accessKey is required") {
+		t.Fatalf("expected missing S3 accessKey error, got: %v", err)
+	}
+}

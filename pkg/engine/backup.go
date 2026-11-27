@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,7 +20,8 @@ import (
 
 // BackupOptions chứa tham số cho lệnh `vkube backup`.
 type BackupOptions struct {
-	OutputPath string // Đường dẫn lưu file backup .tar.gz trên máy Deployer
+	OutputPath string // Đường dẫn lưu file backup cục bộ (nếu trống: lưu theo spec.backup.local.dir hoặc file tạm khi đẩy S3/SFTP)
+	Target     string // Ghi đè đích lưu trữ: local | s3 | sftp (bỏ trống sẽ lấy từ spec.backup.target)
 }
 
 // RestoreOptions chứa tham số cho lệnh `vkube restore`.
@@ -27,14 +30,57 @@ type RestoreOptions struct {
 }
 
 // Backup chụp snapshot etcd (kèm verify bằng etcdutl/etcdctl snapshot status), đóng gói cùng
-// toàn bộ /etc/kubernetes/pki/ và admin.conf rồi tải về máy Deployer bằng Pure Go SFTP.
+// toàn bộ /etc/kubernetes/pki/ và admin.conf rồi lưu về đích đã cấu hình (local, S3/MinIO, hoặc SFTP/NAS).
 func (e *Engine) Backup(ctx context.Context, cfg *api.ClusterConfig, opts BackupOptions) error {
 	start := time.Now()
 	cp1 := cfg.ControlPlanes()[0]
 
-	outPath := strings.TrimSpace(opts.OutputPath)
-	if outPath == "" {
-		outPath = fmt.Sprintf("backup-%s-%s.tar.gz", cfg.Metadata.Name, time.Now().Format("20060102-150405"))
+	target := strings.TrimSpace(opts.Target)
+	if target == "" {
+		target = cfg.Spec.Backup.Target
+	}
+	if target == "" {
+		target = api.BackupTargetLocal
+	}
+
+	defaultFileName := fmt.Sprintf("backup-%s-%s.tar.gz", cfg.Metadata.Name, time.Now().Format("20060102-150405"))
+	localPath := strings.TrimSpace(opts.OutputPath)
+	removeLocalAfterUpload := false
+
+	switch target {
+	case api.BackupTargetLocal:
+		if localPath == "" {
+			dir := ""
+			if cfg.Spec.Backup.Local != nil {
+				dir = strings.TrimSpace(cfg.Spec.Backup.Local.Dir)
+			}
+			if dir != "" {
+				localPath = filepath.Join(dir, defaultFileName)
+			} else {
+				localPath = defaultFileName
+			}
+		}
+	case api.BackupTargetS3:
+		if cfg.Spec.Backup.S3 == nil {
+			return fmt.Errorf("backup target is \"s3\" but spec.backup.s3 is not configured")
+		}
+		if localPath == "" {
+			localPath = filepath.Join(os.TempDir(), defaultFileName)
+			removeLocalAfterUpload = true
+		}
+	case api.BackupTargetSFTP:
+		if cfg.Spec.Backup.SFTP == nil {
+			return fmt.Errorf("backup target is \"sftp\" but spec.backup.sftp is not configured")
+		}
+		if localPath == "" {
+			localPath = filepath.Join(os.TempDir(), defaultFileName)
+			removeLocalAfterUpload = true
+		}
+	default:
+		return fmt.Errorf("unsupported backup target %q (supported: local, s3, sftp)", target)
+	}
+	if removeLocalAfterUpload {
+		defer os.Remove(localPath)
 	}
 
 	client, err := ssh.Dial(ctx, cp1.Name, cp1.Host, cfg.EffectiveSSH(cp1))
@@ -43,7 +89,7 @@ func (e *Engine) Backup(ctx context.Context, cfg *api.ClusterConfig, opts Backup
 	}
 	defer client.Close()
 
-	fmt.Fprintf(e.Out, "==> Đang sao lưu etcd & PKI của cụm %q từ %s (%s)...\n", cfg.Metadata.Name, cp1.Name, cp1.Host)
+	fmt.Fprintf(e.Out, "==> Đang sao lưu etcd & PKI của cụm %q từ %s (%s) [target: %s]...\n", cfg.Metadata.Name, cp1.Name, cp1.Host, target)
 
 	cp1User := cfg.EffectiveSSH(cp1).User
 	backupScript := fmt.Sprintf(`set -euo pipefail
@@ -88,36 +134,103 @@ chmod 0600 "$OUT_ARCHIVE"
 	}
 
 	// Tải file backup về máy Deployer bằng Pure Go SFTP và xóa ngay file tạm trên CP-1
-	fmt.Fprintf(e.Out, "  [download]  Đang tải bản sao lưu về %s...\n", outPath)
-	dlErr := client.DownloadFile(ctx, ".vkube-tmp/vkube-backup.tar.gz", outPath)
+	fmt.Fprintf(e.Out, "  [download]  Đang kéo bản sao lưu từ %s về máy Deployer...\n", cp1.Name)
+	dlErr := client.DownloadFile(ctx, ".vkube-tmp/vkube-backup.tar.gz", localPath)
 	_, _ = client.RunSudo(ctx, fmt.Sprintf(`USER_HOME="$(getent passwd %s | cut -d: -f6)"; rm -f "$USER_HOME/.vkube-tmp/vkube-backup.tar.gz"`, cp1User))
 	if dlErr != nil {
 		return fmt.Errorf("download backup archive: %w", dlErr)
 	}
 
-	sha, size, err := fileSHA256(outPath)
+	sha, size, err := fileSHA256(localPath)
 	if err != nil {
 		return err
 	}
+
+	// Đẩy lên đích lưu trữ từ xa (S3/MinIO hoặc SFTP/NAS) nếu được chọn
+	fileName := filepath.Base(localPath)
+	var remoteURI string
+	switch target {
+	case api.BackupTargetS3:
+		objectKey := fileName
+		if prefix := strings.Trim(cfg.Spec.Backup.S3.Prefix, "/"); prefix != "" {
+			objectKey = path.Join(prefix, fileName)
+		}
+		fmt.Fprintf(e.Out, "  [upload]    Đang đẩy bản sao lưu lên S3/MinIO (%s -> bucket %s)...\n", cfg.Spec.Backup.S3.Endpoint, cfg.Spec.Backup.S3.Bucket)
+		remoteURI, err = s3UploadFile(ctx, cfg.Spec.Backup.S3, localPath, objectKey)
+		if err != nil {
+			return err
+		}
+	case api.BackupTargetSFTP:
+		fmt.Fprintf(e.Out, "  [upload]    Đang đẩy bản sao lưu lên SFTP (%s@%s:%s)...\n", cfg.Spec.Backup.SFTP.User, cfg.Spec.Backup.SFTP.Host, cfg.Spec.Backup.SFTP.RemoteDir)
+		remoteURI, err = sftpUploadBackup(ctx, cfg.Spec.Backup.SFTP, localPath, fileName)
+		if err != nil {
+			return err
+		}
+	}
+
 	fmt.Fprintf(e.Out, "\nSao lưu cụm %q thành công sau %s!\n", cfg.Metadata.Name, time.Since(start).Round(time.Millisecond))
-	fmt.Fprintf(e.Out, "  File:   %s (%.2f MB)\n", outPath, float64(size)/(1024*1024))
+	if remoteURI != "" {
+		fmt.Fprintf(e.Out, "  Remote: %s (%.2f MB)\n", remoteURI, float64(size)/(1024*1024))
+		if !removeLocalAfterUpload {
+			fmt.Fprintf(e.Out, "  Local:  %s\n", localPath)
+		}
+	} else {
+		fmt.Fprintf(e.Out, "  File:   %s (%.2f MB)\n", localPath, float64(size)/(1024*1024))
+	}
 	fmt.Fprintf(e.Out, "  SHA256: %s\n", sha)
 	return nil
 }
 
-// Restore khôi phục cụm 1-node hoặc 3-node HA từ file backup .tar.gz mà không bị split-brain:
-// dừng kubelet/static pods đồng loạt trên toàn bộ Control Plane, khôi phục PKI + etcd với initial-cluster khớp 100%,
+// Restore khôi phục cụm 1-node hoặc 3-node HA từ file backup .tar.gz (hỗ trợ đường dẫn cục bộ, s3://..., hoặc sftp://...)
+// mà không bị split-brain: dừng kubelet/static pods đồng loạt trên toàn bộ Control Plane, khôi phục PKI + etcd với initial-cluster khớp 100%,
 // sau đó khởi động lại toàn bộ Control Plane và kiểm tra trạng thái cụm.
 func (e *Engine) Restore(ctx context.Context, cfg *api.ClusterConfig, opts RestoreOptions) error {
 	start := time.Now()
-	if strings.TrimSpace(opts.BackupPath) == "" {
-		return fmt.Errorf("backup archive path is required (use --backup <file.tar.gz>)")
+	backupRef := strings.TrimSpace(opts.BackupPath)
+	if backupRef == "" {
+		return fmt.Errorf("backup archive path or URI is required (use --backup <file.tar.gz | s3://... | sftp://...>)")
 	}
 
-	fmt.Fprintf(e.Out, "==> Kiểm tra tính hợp lệ của bản sao lưu %s...\n", opts.BackupPath)
-	if err := verifyBackupArchive(opts.BackupPath); err != nil {
+	localBackup := backupRef
+	if bucket, key, ok := parseS3URI(backupRef); ok {
+		if cfg.Spec.Backup.S3 == nil {
+			return fmt.Errorf("restore from %q requires spec.backup.s3 (or --s3-* flags)", backupRef)
+		}
+		s3Cfg := *cfg.Spec.Backup.S3
+		s3Cfg.Bucket = bucket
+		tmpFile, err := os.CreateTemp("", "vkube-restore-*.tar.gz")
+		if err != nil {
+			return err
+		}
+		localBackup = tmpFile.Name()
+		_ = tmpFile.Close()
+		defer os.Remove(localBackup)
+		fmt.Fprintf(e.Out, "==> Đang tải bản sao lưu từ S3 (%s)...\n", backupRef)
+		if err := s3DownloadFile(ctx, &s3Cfg, key, localBackup); err != nil {
+			return err
+		}
+	} else if remotePath, ok := parseSFTPURI(backupRef); ok {
+		if cfg.Spec.Backup.SFTP == nil {
+			return fmt.Errorf("restore from %q requires spec.backup.sftp (or --sftp-* flags)", backupRef)
+		}
+		tmpFile, err := os.CreateTemp("", "vkube-restore-*.tar.gz")
+		if err != nil {
+			return err
+		}
+		localBackup = tmpFile.Name()
+		_ = tmpFile.Close()
+		defer os.Remove(localBackup)
+		fmt.Fprintf(e.Out, "==> Đang tải bản sao lưu từ SFTP (%s)...\n", backupRef)
+		if err := sftpDownloadBackup(ctx, cfg.Spec.Backup.SFTP, remotePath, localBackup); err != nil {
+			return err
+		}
+	}
+
+	fmt.Fprintf(e.Out, "==> Kiểm tra tính hợp lệ của bản sao lưu %s...\n", backupRef)
+	if err := verifyBackupArchive(localBackup); err != nil {
 		return fmt.Errorf("invalid backup archive: %w", err)
 	}
+	opts.BackupPath = localBackup
 
 	cps := cfg.ControlPlanes()
 	subCfg := *cfg

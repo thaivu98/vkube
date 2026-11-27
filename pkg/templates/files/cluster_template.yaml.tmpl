@@ -43,7 +43,8 @@ spec:
   networking:
     podSubnet: 10.244.0.0/16
     serviceSubnet: 10.96.0.0/12
-    cni: calico                      # CNI mặc định ở v0.1: calico (v0.2 bổ sung cilium)
+    cni: calico                      # Hỗ trợ: calico (mặc định) hoặc cilium (eBPF)
+    # kubeProxyReplacement: false    # Bật true khi dùng cni: cilium để chạy eBPF không cần kube-proxy
 
   # ----------------------------------------------------------------------------
   # Private Registry / Harbor nội bộ (Tùy chọn — cho Air-gapped Enterprise)
@@ -70,6 +71,30 @@ spec:
       enabled: false                 # Kong Ingress Controller (DB-less API Gateway) — nên bật kèm metalLB
     # customManifests:               # Danh sách file YAML riêng của bạn (cert-manager, NFS CSI, ArgoCD...)
     #   - ./my-addons/cert-manager.yaml
+
+  # ----------------------------------------------------------------------------
+  # Sao lưu etcd & PKI (`vkube backup` / `vkube restore`)
+  # Hỗ trợ 3 đích lưu trữ: "local" (mặc định), "s3" (AWS S3/MinIO/Ceph), "sftp" (NAS/Backup Server)
+  # ----------------------------------------------------------------------------
+  # backup:
+  #   target: s3                     # Đổi thành: local | s3 | sftp
+  #   local:
+  #     dir: ./backups               # Thư mục cục bộ (hoặc mount NFS/SMB sẵn trên máy Deployer)
+  #   s3:
+  #     endpoint: https://minio.internal:9000
+  #     bucket: k8s-etcd-backups
+  #     prefix: vkube/my-cluster
+  #     region: us-east-1
+  #     accessKey: ""                # Hoặc đặt biến môi trường VKUBE_S3_ACCESS_KEY / AWS_ACCESS_KEY_ID
+  #     secretKey: ""                # Hoặc đặt biến môi trường VKUBE_S3_SECRET_KEY / AWS_SECRET_ACCESS_KEY
+  #     insecureSkipVerify: false    # Bật true nếu MinIO/Ceph nội bộ dùng chứng chỉ self-signed
+  #   sftp:
+  #     host: 192.0.2.50
+  #     port: 22
+  #     user: backup
+  #     privateKeyPath: ~/.ssh/id_ed25519
+  #     # password: ""               # Hoặc đặt biến môi trường VKUBE_BACKUP_SFTP_PASSWORD
+  #     remoteDir: /data/backups/k8s
 
   # ----------------------------------------------------------------------------
   # Cấu hình SSH mặc định cho toàn cụm (từng node bên dưới có thể ghi đè riêng)

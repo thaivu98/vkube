@@ -2,9 +2,11 @@ package engine
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,5 +317,87 @@ func TestValidateNodeFacts_RHELAndRockySupport(t *testing.T) {
 		if !strings.Contains(resetScript, want) {
 			t.Errorf("expected %q in reset script:\n%s", want, resetScript)
 		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestS3BackupUploadDownloadSigV4(t *testing.T) {
+	stored := make(map[string][]byte)
+	var lastAuth, lastHash string
+
+	origFactory := s3TransportFactory
+	t.Cleanup(func() { s3TransportFactory = origFactory })
+	s3TransportFactory = func(_ bool) http.RoundTripper {
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			lastAuth = r.Header.Get("Authorization")
+			lastHash = r.Header.Get("x-amz-content-sha256")
+			switch r.Method {
+			case http.MethodPut:
+				body, _ := io.ReadAll(r.Body)
+				stored[r.URL.Path] = body
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			case http.MethodGet:
+				data, ok := stored[r.URL.Path]
+				if !ok {
+					return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found")), Header: make(http.Header)}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(data)), Header: make(http.Header)}, nil
+			default:
+				return &http.Response{StatusCode: http.StatusMethodNotAllowed, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "backup-test.tar.gz")
+	payload := []byte("vkube-etcd-backup-payload-12345")
+	if err := os.WriteFile(srcFile, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s3Cfg := &api.S3BackupConfig{
+		Endpoint:  "https://minio.internal:9000",
+		Bucket:    "k8s-backups",
+		Region:    "ap-southeast-1",
+		AccessKey: "test-ak",
+		SecretKey: "test-sk",
+	}
+
+	uri, err := s3UploadFile(context.Background(), s3Cfg, srcFile, "prod/backup-test.tar.gz")
+	if err != nil {
+		t.Fatalf("s3UploadFile failed: %v", err)
+	}
+	if uri != "s3://k8s-backups/prod/backup-test.tar.gz" {
+		t.Fatalf("unexpected S3 URI: %q", uri)
+	}
+	if !strings.HasPrefix(lastAuth, "AWS4-HMAC-SHA256 Credential=test-ak/") || !strings.Contains(lastAuth, "/ap-southeast-1/s3/aws4_request") {
+		t.Errorf("unexpected SigV4 Authorization header: %q", lastAuth)
+	}
+	if len(lastHash) != 64 {
+		t.Errorf("expected 64-hex x-amz-content-sha256, got %q", lastHash)
+	}
+
+	dstFile := filepath.Join(dir, "downloaded.tar.gz")
+	if err := s3DownloadFile(context.Background(), s3Cfg, "prod/backup-test.tar.gz", dstFile); err != nil {
+		t.Fatalf("s3DownloadFile failed: %v", err)
+	}
+	got, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("downloaded payload mismatch: got %q, want %q", string(got), string(payload))
+	}
+
+	b, k, ok := parseS3URI("s3://k8s-backups/prod/backup-test.tar.gz")
+	if !ok || b != "k8s-backups" || k != "prod/backup-test.tar.gz" {
+		t.Fatalf("parseS3URI unexpected: b=%q k=%q ok=%v", b, k, ok)
+	}
+	rp, ok := parseSFTPURI("sftp://backup@10.0.0.50/data/backups/test.tar.gz")
+	if !ok || rp != "/data/backups/test.tar.gz" {
+		t.Fatalf("parseSFTPURI unexpected: rp=%q ok=%v", rp, ok)
 	}
 }

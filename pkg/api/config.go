@@ -83,6 +83,43 @@ func (c *ClusterConfig) ApplyDefaults() {
 	if c.Spec.ControlPlaneEndpoint == "" && c.Spec.VIP != "" {
 		c.Spec.ControlPlaneEndpoint = net.JoinHostPort(c.Spec.VIP, "6443")
 	}
+
+	// Giá trị mặc định & đọc secret từ biến môi trường cho cấu hình Backup (local / s3 / sftp)
+	if c.Spec.Backup.Target == "" {
+		c.Spec.Backup.Target = BackupTargetLocal
+	}
+	if c.Spec.Backup.S3 != nil {
+		if c.Spec.Backup.S3.Region == "" {
+			c.Spec.Backup.S3.Region = "us-east-1"
+		}
+		if c.Spec.Backup.S3.Endpoint == "" {
+			c.Spec.Backup.S3.Endpoint = fmt.Sprintf("https://s3.%s.amazonaws.com", c.Spec.Backup.S3.Region)
+		}
+		if c.Spec.Backup.S3.AccessKey == "" {
+			if v := os.Getenv("VKUBE_S3_ACCESS_KEY"); v != "" {
+				c.Spec.Backup.S3.AccessKey = v
+			} else if v := os.Getenv("AWS_ACCESS_KEY_ID"); v != "" {
+				c.Spec.Backup.S3.AccessKey = v
+			}
+		}
+		if c.Spec.Backup.S3.SecretKey == "" {
+			if v := os.Getenv("VKUBE_S3_SECRET_KEY"); v != "" {
+				c.Spec.Backup.S3.SecretKey = v
+			} else if v := os.Getenv("AWS_SECRET_ACCESS_KEY"); v != "" {
+				c.Spec.Backup.S3.SecretKey = v
+			}
+		}
+	}
+	if c.Spec.Backup.SFTP != nil {
+		if c.Spec.Backup.SFTP.Port == 0 {
+			c.Spec.Backup.SFTP.Port = DefaultSSHPort
+		}
+		if c.Spec.Backup.SFTP.Password == "" {
+			if v := os.Getenv("VKUBE_BACKUP_SFTP_PASSWORD"); v != "" {
+				c.Spec.Backup.SFTP.Password = v
+			}
+		}
+	}
 }
 
 // Validate kiểm tra tính hợp lệ toàn diện của ClusterConfig trước khi triển khai.
@@ -221,6 +258,45 @@ func (c *ClusterConfig) Validate() error {
 		if strings.TrimSpace(m.Host) == "" || strings.TrimSpace(m.Endpoint) == "" {
 			errs = append(errs, fmt.Sprintf("spec.registry.mirrors[%d] must specify both host and endpoint", i))
 		}
+	}
+
+	switch c.Spec.Backup.Target {
+	case "", BackupTargetLocal:
+		// Lưu về thư mục cục bộ (mặc định)
+	case BackupTargetS3:
+		if c.Spec.Backup.S3 == nil {
+			errs = append(errs, "spec.backup.s3 is required when spec.backup.target is \"s3\"")
+		} else {
+			if strings.TrimSpace(c.Spec.Backup.S3.Bucket) == "" {
+				errs = append(errs, "spec.backup.s3.bucket is required")
+			}
+			if strings.TrimSpace(c.Spec.Backup.S3.AccessKey) == "" {
+				errs = append(errs, "spec.backup.s3.accessKey is required (or set VKUBE_S3_ACCESS_KEY / AWS_ACCESS_KEY_ID)")
+			}
+			if strings.TrimSpace(c.Spec.Backup.S3.SecretKey) == "" {
+				errs = append(errs, "spec.backup.s3.secretKey is required (or set VKUBE_S3_SECRET_KEY / AWS_SECRET_ACCESS_KEY)")
+			}
+		}
+	case BackupTargetSFTP:
+		if c.Spec.Backup.SFTP == nil {
+			errs = append(errs, "spec.backup.sftp is required when spec.backup.target is \"sftp\"")
+		} else {
+			if strings.TrimSpace(c.Spec.Backup.SFTP.Host) == "" {
+				errs = append(errs, "spec.backup.sftp.host is required")
+			}
+			if strings.TrimSpace(c.Spec.Backup.SFTP.User) == "" {
+				errs = append(errs, "spec.backup.sftp.user is required")
+			}
+			if strings.TrimSpace(c.Spec.Backup.SFTP.RemoteDir) == "" {
+				errs = append(errs, "spec.backup.sftp.remoteDir is required")
+			}
+			if c.Spec.Backup.SFTP.PrivateKeyPath == "" && c.Spec.Backup.SFTP.Password == "" && os.Getenv("SSH_AUTH_SOCK") == "" {
+				errs = append(errs, "spec.backup.sftp requires privateKeyPath, password, VKUBE_BACKUP_SFTP_PASSWORD, or SSH_AUTH_SOCK")
+			}
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("spec.backup.target %q is not supported (supported: %s, %s, %s)",
+			c.Spec.Backup.Target, BackupTargetLocal, BackupTargetS3, BackupTargetSFTP))
 	}
 
 	if len(errs) > 0 {

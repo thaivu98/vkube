@@ -20,6 +20,10 @@ const (
 	CNICalico = "calico"
 	CNICilium = "cilium"
 
+	BackupTargetLocal = "local"
+	BackupTargetS3    = "s3"
+	BackupTargetSFTP  = "sftp"
+
 	TaintEffectNoSchedule       = "NoSchedule"
 	TaintEffectPreferNoSchedule = "PreferNoSchedule"
 	TaintEffectNoExecute        = "NoExecute"
@@ -90,6 +94,8 @@ type ClusterSpec struct {
 	Registry RegistryConfig `yaml:"registry,omitempty" json:"registry,omitempty"`
 	// Addons cho phép bật/tắt các Core Addons (Metrics Server, Local Path CSI, MetalLB, Kong Ingress) và customManifests.
 	Addons AddonsConfig `yaml:"addons,omitempty" json:"addons,omitempty"`
+	// Backup cấu hình đích lưu trữ cho `vkube backup` / `vkube restore` (local, s3/MinIO, sftp/NAS).
+	Backup BackupConfig `yaml:"backup,omitempty" json:"backup,omitempty"`
 	// SSH là cấu hình SSH mặc định cho toàn cụm (từng node có thể ghi đè).
 	SSH SSHConfig `yaml:"ssh,omitempty" json:"ssh,omitempty"`
 	// Nodes là danh sách các máy chủ thành viên trong cụm.
@@ -129,6 +135,43 @@ type ToggleAddon struct {
 type MetalLBAddon struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	IPRange string `yaml:"ipRange,omitempty" json:"ipRange,omitempty"`
+}
+
+// BackupConfig cấu hình đích lưu trữ cho lệnh `vkube backup` và `vkube restore` (local, s3/MinIO, hoặc sftp/NAS).
+type BackupConfig struct {
+	Target string             `yaml:"target,omitempty" json:"target,omitempty"` // local | s3 | sftp
+	Local  *LocalBackupConfig `yaml:"local,omitempty" json:"local,omitempty"`
+	S3     *S3BackupConfig    `yaml:"s3,omitempty" json:"s3,omitempty"`
+	SFTP   *SFTPBackupConfig  `yaml:"sftp,omitempty" json:"sftp,omitempty"`
+}
+
+// LocalBackupConfig lưu bản sao lưu về thư mục cục bộ trên máy Deployer (hoặc thư mục đã mount NFS/SMB).
+type LocalBackupConfig struct {
+	Dir string `yaml:"dir,omitempty" json:"dir,omitempty"`
+}
+
+// S3BackupConfig cấu hình đẩy/tải bản sao lưu lên AWS S3 hoặc S3-compatible (MinIO, Ceph RGW, RustFS, Wasabi).
+type S3BackupConfig struct {
+	Endpoint           string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Bucket             string `yaml:"bucket" json:"bucket"`
+	Prefix             string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	Region             string `yaml:"region,omitempty" json:"region,omitempty"`
+	AccessKey          string `yaml:"accessKey,omitempty" json:"accessKey,omitempty"`
+	SecretKey          string `yaml:"secretKey,omitempty" json:"secretKey,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecureSkipVerify,omitempty" json:"insecureSkipVerify,omitempty"`
+	UsePathStyle       *bool  `yaml:"usePathStyle,omitempty" json:"usePathStyle,omitempty"`
+}
+
+// SFTPBackupConfig cấu hình đẩy/tải bản sao lưu lên máy chủ Backup / NAS từ xa qua giao thức SFTP (Pure Go).
+type SFTPBackupConfig struct {
+	Host                  string `yaml:"host" json:"host"`
+	Port                  int    `yaml:"port,omitempty" json:"port,omitempty"`
+	User                  string `yaml:"user" json:"user"`
+	PrivateKeyPath        string `yaml:"privateKeyPath,omitempty" json:"privateKeyPath,omitempty"`
+	PrivateKeyPassphrase  string `yaml:"privateKeyPassphrase,omitempty" json:"privateKeyPassphrase,omitempty"`
+	Password              string `yaml:"password,omitempty" json:"password,omitempty"`
+	RemoteDir             string `yaml:"remoteDir" json:"remoteDir"`
+	InsecureIgnoreHostKey bool   `yaml:"insecureIgnoreHostKey,omitempty" json:"insecureIgnoreHostKey,omitempty"`
 }
 
 // NetworkingConfig định nghĩa thông số mạng của cụm Kubernetes.
