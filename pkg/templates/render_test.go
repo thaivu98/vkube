@@ -98,3 +98,20 @@ func TestRenderKubeadmJoin(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderKongDBLess(t *testing.T) {
+	s := string(RenderKongDBLess("3.9", "3.5"))
+	for _, want := range []string{
+		"kind: Namespace",
+		"kind: IngressClass",
+		"image: docker.io/library/kong:3.9",
+		"image: docker.io/kong/kubernetes-ingress-controller:3.5",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected %q in rendered Kong v3.x manifest", want)
+		}
+	}
+	if strings.Contains(s, "__VKUBE_KONG_") {
+		t.Errorf("rendered Kong manifest still contains unreplaced placeholder")
+	}
+}

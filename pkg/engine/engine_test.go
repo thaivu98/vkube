@@ -176,3 +176,18 @@ func TestParseJoinCommand(t *testing.T) {
 		t.Fatalf("unexpected parsed values: ep=%q tok=%q hash=%q", ep, tok, hash)
 	}
 }
+
+func TestContainerdConfigPatchCmd(t *testing.T) {
+	cmd := containerdConfigPatchCmd("registry.k8s.io/pause:3.10.2")
+	for _, want := range []string{
+		"SystemdCgroup = true",
+		`sandbox_image = "registry.k8s.io/pause:3.10.2"`,
+		`sandbox = `,
+		`registry.k8s.io/pause:3.10.2`,
+		`config_path = "/etc/containerd/certs.d"`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("expected %q in containerdConfigPatchCmd:\n%s", want, cmd)
+		}
+	}
+}

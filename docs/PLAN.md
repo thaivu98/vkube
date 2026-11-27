@@ -1,10 +1,14 @@
 # Kế hoạch phát triển `vkube` (v0.1 → v1.0)
 
 ## Current Status / Handover
-- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1) — **HOÀN TẤT & ĐÃ PHÁT HÀNH!**
-- **Giai đoạn hiện tại:** Hoàn tất toàn bộ **v0.1 (Phase 0 → Phase 5)** — Sẵn sàng bắt đầu **v0.2 (Phase 6 / Task 12)**
-- **Task đang thực hiện:** Chưa có (chờ chọn task đầu tiên của v0.2)
+- **Phiên bản đã phát hành:** `v1.32.2-vkube.1` (MVP v0.1); **BOM mặc định hiện tại trên `main`:** `v1.36.7-vkube.1`
+- **Giai đoạn hiện tại:** **Phase 6 (v0.2)** — Vận hành Day-2, Nâng cấp BOM & Mở rộng Hạ tầng
+- **Task đang thực hiện:** Đã xong **Task 12**, sẵn sàng sang **Task 13** (`vkube add-node` & `vkube remove-node`)
 - **Vừa hoàn thành:**
+  - **Task 12 (BOM v1.36.7 + Containerd v2 + Kong v3.x):**
+    - Nâng BOM mặc định (`pkg/versions/versions.yaml`) lên nhánh Kubernetes đang được hỗ trợ chính thức **`v1.36.7`** (`etcd 3.6.8-0`, `coredns v1.14.2`, `pause 3.10.2`), **`containerd 2.4.2`**, `runc v1.5.3`, `cni-plugins v1.10.0`, `crictl v1.36.0`, **`Calico v3.33.1`** (chuyển sang `quay.io/calico/{calico,node,third-party-cni-plugins}`), **`kube-vip v1.3.2`**, `metrics-server v0.9.1`, `local-path v0.0.37`, `metallb v0.16.2` — toàn bộ manifest đều ghim SHA256 64-hex.
+    - Nâng cấp **Kong Ingress Controller** lên dòng **v3.x** (`kong_controller: 3.5` / `kong_gateway: 3.9`), nhúng manifest DB-less render từ Helm chart chính thức `kong/kong v3.4.1` vào `pkg/templates/files/kong-dbless.yaml` kèm tự tạo `Namespace`/`IngressClass` và bơm version động từ BOM (không phụ thuộc URL cũ đã deprecated).
+    - Nâng cấp `pkg/engine/runtime.go` tương thích cấu hình `/etc/containerd/config.toml` của cả **containerd 1.x (`sandbox_image`)** lẫn **containerd 2.x (`sandbox`)**, và mở rộng patch `busybox` của `local-path v0.0.37` cho `docker.io/library/busybox`.
   - Phát hành chính thức tag **`v1.32.2-vkube.1`** kèm GitHub Actions tự động build 6 binary đa nền tảng + `SHA256SUMS` và script cài 1 dòng `scripts/install.sh` (tự verify SHA256).
   - Kiểm thử E2E thành công trên cụm 3 VM Ubuntu ARM64 thật:
     - **Offline Bundle (1 CP + 2 Worker + đủ 4 Core Addons):** **2 phút 29 giây (`2m29s`)**.
@@ -67,7 +71,7 @@
 ---
 
 ## Phase 6 (v0.2): Vận hành Day-2, Nâng cấp BOM & Mở rộng Hạ tầng
-- [ ] **Task 12 — Nâng cấp BOM & Addons mới nhất:** Kiểm tra support matrix mới nhất trên `kubernetes.io`, nâng BOM `versions.yaml` lên nhánh Kubernetes đang được hỗ trợ chính thức (`v1.35.x+`), cập nhật `containerd`, `Calico`, `kube-vip` tương thích và nâng **Kong Ingress Controller** lên dòng **v3.x**.
+- [x] **Task 12 — Nâng cấp BOM & Addons mới nhất:** Kiểm tra support matrix mới nhất trên `kubernetes.io`, nâng BOM `versions.yaml` lên nhánh Kubernetes đang được hỗ trợ chính thức (`v1.35.x+`), cập nhật `containerd`, `Calico`, `kube-vip` tương thích và nâng **Kong Ingress Controller** lên dòng **v3.x**.
 - [ ] **Task 13 — Scale cụm (`vkube add-node` & `vkube remove-node`):** Hỗ trợ thêm mới Worker/Control Plane vào cụm đang chạy và drain + gỡ node an toàn (kèm dọn `etcd` member nếu gỡ CP).
 - [ ] **Task 14 — Backup & Restore `etcd` (`vkube backup` & `vkube restore`):** Tự động snapshot `etcd` (verify bằng `etcdctl snapshot status`) kèm sao lưu `/etc/kubernetes/pki/` về máy Deployer, và hỗ trợ khôi phục cụm 1-node / 3-node HA không bị split-brain.
 - [ ] **Task 15 — Bổ sung CNI Cilium (eBPF):** Hỗ trợ chọn `spec.networking.cni: cilium` song song với `calico` (kèm tùy chọn chạy không cần `kube-proxy` và đóng gói offline trong bundle).

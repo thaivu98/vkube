@@ -2,27 +2,26 @@
 # Tuyệt đối không hardcode version/URL trong mã nguồn Go — mọi phiên bản đều được quản lý tại đây.
 # Người dùng có thể sao chép file này, chỉnh sửa bất kỳ phiên bản nào và truyền qua cờ --manifest.
 
-releaseTag: v1.32.2-vkube.1
+releaseTag: v1.36.7-vkube.1
 
 components:
-  kubernetes: v1.32.2
-  containerd: 1.7.25
-  runc: v1.2.4
-  cni_plugins: v1.6.2
-  crictl: v1.32.0
-  calico: v3.29.2
-  kube_vip: v0.8.9
-  coredns: v1.11.3
-  pause: "3.10"
-  etcd: 3.5.16-0
+  kubernetes: v1.36.7
+  containerd: 2.4.2
+  runc: v1.5.3
+  cni_plugins: v1.10.0
+  crictl: v1.36.0
+  calico: v3.33.1
+  kube_vip: v1.3.2
+  coredns: v1.14.2
+  pause: "3.10.2"
+  etcd: 3.6.8-0
   # Core Addons (bật/tắt linh hoạt trong cluster.yaml)
-  metrics_server: v0.7.2
-  local_path: v0.0.30
+  metrics_server: v0.9.1
+  local_path: v0.0.37
   busybox: "1.36.1"
-  metallb: v0.14.9
-  kong_manifest: v2.12.5
-  kong_gateway: "3.4"
-  kong_controller: "2.12"
+  metallb: v0.16.2
+  kong_gateway: "3.9"
+  kong_controller: "3.5"
 
 artifacts:
   - name: kubeadm
@@ -78,36 +77,29 @@ artifacts:
     component: calico
     type: manifest
     url: https://raw.githubusercontent.com/projectcalico/calico/{{.Version}}/manifests/calico.yaml
-    sha256: 999fe49427009aa1e6cc627061f9d54142c0d9dbe764350a70b4a5ac23c16afc
+    sha256: 3368e62807b949438842e31f46c9b6df741731b4c755d0a622dd062b2cb20495
     dest: manifests/calico.yaml
 
   - name: metrics-server-manifest
     component: metrics_server
     type: manifest
     url: https://github.com/kubernetes-sigs/metrics-server/releases/download/{{.Version}}/components.yaml
-    sha256: f103539a54ed72efe66616afc74a8bfaed651703cb3918797599046af5617441
+    sha256: 3c7f57cdbee0f57fb0259a150e8f6d6cb4f29d72d1aa5dce8803151dd6d4c2a1
     dest: manifests/metrics-server.yaml
 
   - name: local-path-manifest
     component: local_path
     type: manifest
     url: https://raw.githubusercontent.com/rancher/local-path-provisioner/{{.Version}}/deploy/local-path-storage.yaml
-    sha256: fe682186b00400fe7e2b72bae16f63e47a56a6dcc677938c6642139ef670045e
+    sha256: 9781b39c24f3f651bd6d6e41b561e04e4904bbdb6d4f8c7a6009df3a702dcd65
     dest: manifests/local-path-storage.yaml
 
   - name: metallb-manifest
     component: metallb
     type: manifest
     url: https://raw.githubusercontent.com/metallb/metallb/{{.Version}}/config/manifests/metallb-native.yaml
-    sha256: 951065e85692aa106f1bb5d5a487d9306154923a794ab1d82122881cbaf588e4
+    sha256: e5f7c268f114c446dc60aaad71b7cabf861f637743e033e354d7d48592807c6d
     dest: manifests/metallb-native.yaml
-
-  - name: kong-manifest
-    component: kong_manifest
-    type: manifest
-    url: https://raw.githubusercontent.com/Kong/kubernetes-ingress-controller/{{.Version}}/deploy/single/all-in-one-dbless.yaml
-    sha256: 78c1f35bf8823618f5ec3a0b141a553bb399638705ebd4d118ad7c84cd6d284b
-    dest: manifests/kong-dbless.yaml
 
 imageGroups:
   - name: kubernetes
@@ -124,9 +116,9 @@ imageGroups:
   - name: calico
     dest: images/calico.tar
     images:
-      - docker.io/calico/cni:{{.Components.calico}}
-      - docker.io/calico/node:{{.Components.calico}}
-      - docker.io/calico/kube-controllers:{{.Components.calico}}
+      - quay.io/calico/calico:{{.Components.calico}}
+      - quay.io/calico/node:{{.Components.calico}}
+      - quay.io/calico/third-party-cni-plugins:{{.Components.calico}}
 
   - name: kube-vip
     dest: images/kube-vip.tar

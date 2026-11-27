@@ -117,10 +117,7 @@ rm -rf "$STAGE_TMP"
 # Chỉ gắn --node-ip khi host là địa chỉ IP thực (nếu host là DNS nội bộ thì để kubelet tự phân giải)
 %s
 
-/usr/local/bin/containerd config default > /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
-sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml
+%s
 
 systemctl daemon-reload
 systemctl enable --now containerd
@@ -143,7 +140,7 @@ rm -rf %s
 			remoteWorkDir, remoteWorkDir, remoteManifestDir,
 			remoteWorkDir, remoteWorkDir, remoteImageDir,
 			kubeletExtraArgsCmd(node.Host),
-			sandboxImage,
+			containerdConfigPatchCmd(sandboxImage),
 			remoteImageDir,
 			remoteWorkDir,
 		)
@@ -203,6 +200,17 @@ func kubeletExtraArgsCmd(host string) string {
 		return fmt.Sprintf(`printf '[Service]\nEnvironment="KUBELET_EXTRA_ARGS=--node-ip=%s"\n' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf`, trimmed)
 	}
 	return "rm -f /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf"
+}
+
+// containerdConfigPatchCmd sinh lệnh cấu hình /etc/containerd/config.toml tương thích cả containerd 1.x và 2.x:
+//   - containerd 1.x dùng khóa sandbox_image = "..."
+//   - containerd 2.x (config version 3) dùng khóa sandbox = "..." trong pinned_images
+func containerdConfigPatchCmd(sandboxImage string) string {
+	return fmt.Sprintf(`/usr/local/bin/containerd config default > /etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
+sed -i -E "s|^([[:space:]]*sandbox = )['\"].*['\"]|\1'%s'|g" /etc/containerd/config.toml
+sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml`, sandboxImage, sandboxImage)
 }
 
 // runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node,
@@ -310,14 +318,11 @@ rm -rf "$STAGE_TMP"
 # Chỉ gắn --node-ip khi host là địa chỉ IP thực (nếu host là DNS nội bộ thì để kubelet tự phân giải)
 %s
 
-/usr/local/bin/containerd config default > /etc/containerd/config.toml
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
-sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml
+%s
 
 systemctl daemon-reload
 systemctl enable --now containerd
-systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host), sandboxImage))
+systemctl enable kubelet`, kubeletExtraArgsCmd(node.Host), containerdConfigPatchCmd(sandboxImage)))
 
 		fmt.Fprintf(e.Out, "  [online]    %-12s đang tải binaries, verify SHA256 & cài containerd/kubelet...\n", node.Name)
 		if _, err := r.RunSudo(ctx, strings.Join(dlCmds, "\n")); err != nil {

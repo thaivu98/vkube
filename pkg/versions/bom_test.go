@@ -57,8 +57,13 @@ func TestLoadDefaultAndResolveMultiArch(t *testing.T) {
 
 func TestLoadFromManifestOverride(t *testing.T) {
 	// Giả lập user xuất file versions.yaml mặc định và sửa đúng 1 dòng phiên bản Kubernetes.
-	customYAML := strings.Replace(string(DefaultBOMBytes()), "kubernetes: v1.32.2", "kubernetes: v1.32.5", 1)
-	customYAML = strings.Replace(customYAML, "releaseTag: v1.32.2-vkube.1", "releaseTag: v1.32.5-vkube.1", 1)
+	def, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault failed: %v", err)
+	}
+	origK8s := def.Components["kubernetes"]
+	customYAML := strings.Replace(string(DefaultBOMBytes()), "kubernetes: "+origK8s, "kubernetes: v1.36.9", 1)
+	customYAML = strings.Replace(customYAML, "releaseTag: "+def.ReleaseTag, "releaseTag: v1.36.9-vkube.1", 1)
 
 	manifestPath := filepath.Join(t.TempDir(), "custom-versions.yaml")
 	if err := os.WriteFile(manifestPath, []byte(customYAML), 0o600); err != nil {
@@ -74,8 +79,8 @@ func TestLoadFromManifestOverride(t *testing.T) {
 		t.Fatalf("Resolve failed: %v", err)
 	}
 
-	if resolved.KubernetesVersion != "v1.32.5" {
-		t.Fatalf("expected overridden k8s version v1.32.5, got %q", resolved.KubernetesVersion)
+	if resolved.KubernetesVersion != "v1.36.9" {
+		t.Fatalf("expected overridden k8s version v1.36.9, got %q", resolved.KubernetesVersion)
 	}
 
 	var kubeadmURL string
@@ -85,7 +90,7 @@ func TestLoadFromManifestOverride(t *testing.T) {
 			break
 		}
 	}
-	wantURL := "https://dl.k8s.io/release/v1.32.5/bin/linux/arm64/kubeadm"
+	wantURL := "https://dl.k8s.io/release/v1.36.9/bin/linux/arm64/kubeadm"
 	if kubeadmURL != wantURL {
 		t.Errorf("expected kubeadm URL %q, got %q", wantURL, kubeadmURL)
 	}
@@ -93,13 +98,13 @@ func TestLoadFromManifestOverride(t *testing.T) {
 	foundAPIServer := false
 	for _, g := range resolved.ImageGroups {
 		for _, img := range g.Images {
-			if img == "registry.k8s.io/kube-apiserver:v1.32.5" {
+			if img == "registry.k8s.io/kube-apiserver:v1.36.9" {
 				foundAPIServer = true
 			}
 		}
 	}
 	if !foundAPIServer {
-		t.Errorf("expected kube-apiserver image to use overridden version v1.32.5")
+		t.Errorf("expected kube-apiserver image to use overridden version v1.36.9")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"strings"
 	"text/template"
 )
 
@@ -56,6 +57,15 @@ func ContainerdService() []byte { return mustRead("files/containerd.service") }
 func KubeletService() []byte    { return mustRead("files/kubelet.service") }
 func KubeadmDropin() []byte     { return mustRead("files/10-kubeadm.conf") }
 func CrictlConfig() []byte      { return mustRead("files/crictl.yaml") }
+
+// RenderKongDBLess render manifest Kong Ingress Controller v3.x (DB-less, kèm Namespace & IngressClass)
+// với phiên bản image được bơm động từ BOM (pkg/versions/versions.yaml).
+func RenderKongDBLess(gatewayVersion, controllerVersion string) []byte {
+	s := string(mustRead("files/kong-dbless.yaml"))
+	s = strings.ReplaceAll(s, "__VKUBE_KONG_GATEWAY_VERSION__", gatewayVersion)
+	s = strings.ReplaceAll(s, "__VKUBE_KONG_CONTROLLER_VERSION__", controllerVersion)
+	return []byte(s)
+}
 
 // RenderClusterTemplate render file cluster.yaml mẫu đầy đủ comment tiếng Việt (Single/Standard/HA + Addons + Registry).
 func RenderClusterTemplate(data ClusterTemplateData) ([]byte, error) {

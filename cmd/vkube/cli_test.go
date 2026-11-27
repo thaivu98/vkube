@@ -39,7 +39,14 @@ func TestBundleExportAndDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read exported manifest: %v", err)
 	}
-	modified := strings.Replace(string(raw), "kubernetes: v1.32.2", "kubernetes: v1.32.9", 1)
+	var lines []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "kubernetes:") {
+			line = "  kubernetes: v1.36.9"
+		}
+		lines = append(lines, line)
+	}
+	modified := strings.Join(lines, "\n")
 	if err := os.WriteFile(manifestFile, []byte(modified), 0o600); err != nil {
 		t.Fatalf("write modified manifest: %v", err)
 	}
@@ -48,7 +55,7 @@ func TestBundleExportAndDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bundle build --dry-run failed: %v", err)
 	}
-	if !strings.Contains(out, "v1.32.9/bin/linux/arm64/kubeadm") {
+	if !strings.Contains(out, "v1.36.9/bin/linux/arm64/kubeadm") {
 		t.Fatalf("expected overridden arm64 kubeadm URL in dry-run output:\n%s", out)
 	}
 }

@@ -3,7 +3,7 @@ PKG      := ./cmd/vkube
 BIN_DIR  := bin
 DIST_DIR := dist
 
-VERSION ?= v1.32.2-vkube.1-dev
+VERSION ?= v1.36.7-vkube.1-dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 

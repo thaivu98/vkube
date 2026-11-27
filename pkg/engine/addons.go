@@ -9,6 +9,7 @@ import (
 
 	"github.com/thaivu98/vkube/pkg/api"
 	"github.com/thaivu98/vkube/pkg/ssh"
+	"github.com/thaivu98/vkube/pkg/templates"
 )
 
 // runAddons cài đặt các Core Addons được bật (metrics-server, local-path, MetalLB, Kong Ingress)
@@ -55,7 +56,7 @@ fi
 		busyboxVer := state.BundleManifest.Components["busybox"]
 		busyboxPatch := ""
 		if busyboxVer != "" {
-			busyboxPatch = fmt.Sprintf(`sed -i -E 's|(image:[[:space:]]*)busybox([[:space:]]*)$|\1busybox:%s\2|g' "$F"`, busyboxVer)
+			busyboxPatch = fmt.Sprintf(`sed -i -E 's|(image:[[:space:]]*)(docker\.io/library/)?busybox([[:space:]]*)$|\1\2busybox:%s\3|g' "$F"`, busyboxVer)
 		}
 		script := fmt.Sprintf(`set -euo pipefail
 F="%s/local-path-storage.yaml"
@@ -111,14 +112,25 @@ rm -f "$USER_HOME/.vkube-tmp/metallb-pool.yaml"
 		}
 	}
 
-	// 4. Kong Ingress Controller (DB-less mode)
+	// 4. Kong Ingress Controller v3.x (DB-less mode, nhúng sẵn từ Helm chart kong/kong kèm version từ BOM)
 	if addons.KongIngress.Enabled {
-		fmt.Fprintf(e.Out, "  [addon]     kong-ingress-controller (DB-less API Gateway)...\n")
+		kongGW := state.BundleManifest.Components["kong_gateway"]
+		kongCtrl := state.BundleManifest.Components["kong_controller"]
+		if kongGW == "" || kongCtrl == "" {
+			return fmt.Errorf("missing kong_gateway or kong_controller version in BOM")
+		}
+		fmt.Fprintf(e.Out, "  [addon]     kong-ingress-controller v%s / gateway v%s (DB-less API Gateway)...\n", kongCtrl, kongGW)
+		kongYAML := templates.RenderKongDBLess(kongGW, kongCtrl)
+		if err := cp1Runner.WriteFile(ctx, kongYAML, ".vkube-tmp/kong-dbless.yaml", 0o600); err != nil {
+			return fmt.Errorf("upload kong manifest: %w", err)
+		}
+		cp1User := state.Config.EffectiveSSH(cp1).User
 		script := fmt.Sprintf(`set -euo pipefail
-F="%s/kong-dbless.yaml"
-sed -i 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "$F"
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$F"
-`, remoteManifestDir)
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+F="$USER_HOME/.vkube-tmp/kong-dbless.yaml"
+trap 'rm -f "$F"' EXIT
+/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts -f "$F"
+`, cp1User)
 		if _, err := cp1Runner.RunSudo(ctx, script); err != nil {
 			return fmt.Errorf("install kong ingress addon: %w", err)
 		}
