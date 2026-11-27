@@ -38,9 +38,9 @@
 | Nhóm tính năng | Trạng thái | Ghi chú kiểm chứng |
 | :--- | :--- | :--- |
 | Core Installer (`apply`/`status`/`reset`, Offline & Online, `kube-vip` 3-CP HA, Calico, 4 Core Addons) | **Released & Tested E2E** | Đã phát hành tag **`v1.32.2-vkube.1`**, đo E2E thật trên 3 VM ARM64 (`2m04s` / `2m29s` / `2m43s` / 3-CP HA). |
-| BOM `v1.36.7` + `containerd 2.4.2` + `Kong v3.5` + `Cilium v1.20.5` | **Implemented (Chờ E2E)** | Đã pass toàn bộ `go vet`, `go test -race` và cross-compile 6 nền tảng trên `main`. |
-| Day-2 (`add-node`/`remove-node`, `backup`/`restore` Local/S3/SFTP + retention/schedule, `certs`, `addons apply`, `upgrade`) | **Implemented (Chờ E2E)** | Đã pass unit test + safety guards (chống sai cluster identity khi restore, chống mất quorum); chờ test E2E trước khi tag. |
-| Enterprise (SSH Bastion, HTTP Proxy, Multi-NIC `nodeIP`, CIS Hardening, Encryption at Rest, BGP, Rocky/Alma/RHEL 8–9, Packer Golden Image, Cosign + SBOM) | **Implemented (Chờ E2E)** | Đã pass unit test & secret-guard; chờ xác thực E2E trên lab trước khi gắn tag `v1.36.7-vkube.1`. |
+| BOM `v1.36.7` + `containerd 2.4.2` + `Calico v3.33.1` + `Kong v3.5` + `MetalLB v0.16.2` + `Local Path v0.0.37` + `Encryption at Rest` | **Tested E2E (`main`)** | Đã chạy E2E thật trên 3 VM Ubuntu ARM64 (`3/3 Ready`, `Kong v3.5` `2/2 Running` nhận IP `192.168.119.240`, `etcd 3.6.8-0`). |
+| Day-2 (`add-node`/`remove-node`, `backup` via `crictl`, `certs check`, `addons apply`) | **Tested E2E (`main`)** | Đã chạy E2E thật: `addons apply` (`46.6s`), `backup` `etcd 3.6.8-0` (`1.1s`), `add-node` `worker-2` (`Ready`), `remove-node` (`967ms`). |
+| Enterprise nâng cao (`Cilium eBPF`, `restore`, `upgrade`, `certs renew`, SSH Bastion, HTTP Proxy, BGP, Rocky/Alma/RHEL 8–9, Packer Golden Image, Cosign + SBOM) | **Implemented (Unit-tested)** | Đã pass toàn bộ `go vet`, `go test -race` và cross-compile 6 nền tảng trên `main`. |
 | External `etcd` tách rời & Dual-stack IPv4/IPv6 | **Planned (Hậu v1.0)** | Kiến trúc mở sẵn sàng bổ sung không cần viết lại core engine. |
 
 ---

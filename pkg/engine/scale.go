@@ -313,13 +313,17 @@ func (e *Engine) RemoveNode(ctx context.Context, cfg *api.ClusterConfig, opts Re
 			fmt.Fprintf(e.Out, "  [WARN]      Sau khi gỡ %s, cụm chỉ còn %d Control Plane (số chẵn) — nên bổ sung CP thay thế để đảm bảo etcd Raft quorum.\n", targetName, remainingCPs)
 		}
 		fmt.Fprintf(e.Out, "  [etcd]      Kiểm tra & gỡ etcd member của %s khỏi Raft quorum...\n", targetName)
-		listCmd := fmt.Sprintf(`/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member list`, activeCP.Name)
+		listCmd := `set -euo pipefail
+ETCD_CID="$(/usr/local/bin/crictl ps --name '^etcd$' -q | head -n 1)"
+/usr/local/bin/crictl exec "$ETCD_CID" etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member list`
 		listRes, err := cpClient.RunSudo(ctx, listCmd)
 		if err != nil {
 			return fmt.Errorf("list etcd members on %s: %w", activeCP.Name, err)
 		}
-		if memberID := parseEtcdMemberID(listRes.Stdout, targetName, targetNode.Host); memberID != "" {
-			rmCmd := fmt.Sprintf(`/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member remove %s`, activeCP.Name, memberID)
+		if memberID := parseEtcdMemberID(listRes.Stdout, targetName, targetNode.EffectiveNodeIP()); memberID != "" {
+			rmCmd := fmt.Sprintf(`set -euo pipefail
+ETCD_CID="$(/usr/local/bin/crictl ps --name '^etcd$' -q | head -n 1)"
+/usr/local/bin/crictl exec "$ETCD_CID" etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key member remove %s`, memberID)
 			if _, err := cpClient.RunSudo(ctx, rmCmd); err != nil {
 				return fmt.Errorf("remove etcd member %s (%s): %w", memberID, targetName, err)
 			}

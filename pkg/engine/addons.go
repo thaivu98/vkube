@@ -206,7 +206,10 @@ func (e *Engine) runAddons(ctx context.Context, state *ClusterState) error {
 fi`
 		if addons.MetricsServer.SecureTLS {
 			fmt.Fprintf(e.Out, "  [addon]     metrics-server (HPA / kubectl top — verified kubelet TLS via serverTLSBootstrap)...\n")
-			tlsPatch = `sed -i '/--kubelet-insecure-tls/d' "$F"`
+			tlsPatch = `sed -i '/--kubelet-insecure-tls/d' "$F"
+for csr in $(/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get csr -o jsonpath='{range .items[?(@.spec.signerName=="kubernetes.io/kubelet-serving")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true); do
+  [ -n "$csr" ] && /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf certificate approve "$csr" >/dev/null 2>&1 || true
+done`
 		} else {
 			fmt.Fprintf(e.Out, "  [addon]     metrics-server (HPA / kubectl top)...\n")
 		}

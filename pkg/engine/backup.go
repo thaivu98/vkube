@@ -101,8 +101,13 @@ OUT_ARCHIVE="$USER_HOME/.vkube-tmp/vkube-backup.tar.gz"
 rm -rf "$BDIR" && mkdir -p -m 0700 "$BDIR" "$USER_HOME/.vkube-tmp"
 trap 'rm -rf "$BDIR" /var/lib/etcd/vkube-snapshot.db' EXIT
 
-# 1. Chụp snapshot etcd ngay từ container etcd đang chạy (tương thích cả Air-gapped & Online)
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- \
+# 1. Chụp snapshot etcd trực tiếp qua crictl exec (không phụ thuộc kube-apiserver hay kubelet-serving TLS, chạy tốt ngay cả khi cụm đang sự cố)
+ETCD_CID="$(/usr/local/bin/crictl ps --name '^etcd$' -q | head -n 1)"
+if [ -z "$ETCD_CID" ]; then
+  echo "ERROR: cannot find running etcd container via crictl" >&2
+  exit 1
+fi
+/usr/local/bin/crictl exec "$ETCD_CID" \
   etcdctl --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
   --cert=/etc/kubernetes/pki/etcd/server.crt \
@@ -110,9 +115,9 @@ trap 'rm -rf "$BDIR" /var/lib/etcd/vkube-snapshot.db' EXIT
   snapshot save /var/lib/etcd/vkube-snapshot.db
 
 # 2. Xác thực tính toàn vẹn snapshot (gọi trực tiếp binary etcdutl/etcdctl, không phụ thuộc /bin/sh vì image etcd là distroless)
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- \
+/usr/local/bin/crictl exec "$ETCD_CID" \
   etcdutl snapshot status /var/lib/etcd/vkube-snapshot.db -w table 2>/dev/null || \
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- \
+/usr/local/bin/crictl exec "$ETCD_CID" \
   etcdctl snapshot status /var/lib/etcd/vkube-snapshot.db -w table
 
 mv /var/lib/etcd/vkube-snapshot.db "$BDIR/etcd-snapshot.db"
@@ -125,7 +130,7 @@ EOF
 tar -czf "$OUT_ARCHIVE" -C "$BDIR" etcd-snapshot.db pki admin.conf backup-metadata.json
 chown %s:%s "$OUT_ARCHIVE"
 chmod 0600 "$OUT_ARCHIVE"
-`, cp1User, cp1.Name, cp1.Name, cp1.Name, cfg.Metadata.Name, cp1.Name, time.Now().UTC().Format(time.RFC3339), cp1User, cp1User)
+`, cp1User, cfg.Metadata.Name, cp1.Name, time.Now().UTC().Format(time.RFC3339), cp1User, cp1User)
 
 	res, err := client.RunSudo(ctx, backupScript)
 	if err != nil {
@@ -515,7 +520,8 @@ BDIR="/var/lib/vkube/sched-backup"
 OUT="/var/backups/vkube-etcd/backup-%s-${TS}.tar.gz"
 rm -rf "$BDIR" && mkdir -p -m 0700 "$BDIR"
 trap 'rm -rf "$BDIR" /var/lib/etcd/vkube-sched-snapshot.db' EXIT
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system exec etcd-%s -- \
+ETCD_CID="$(/usr/local/bin/crictl ps --name '^etcd$' -q | head -n 1)"
+/usr/local/bin/crictl exec "$ETCD_CID" \
   etcdctl --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
   --cert=/etc/kubernetes/pki/etcd/server.crt \
@@ -554,7 +560,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now vkube-etcd-backup.timer
 systemctl list-timers --no-pager vkube-etcd-backup.timer || true
-`, cfg.Metadata.Name, cp1.Name, cfg.Metadata.Name, retention+1, onCalendar)
+`, cfg.Metadata.Name, cfg.Metadata.Name, retention+1, onCalendar)
 
 	res, err := client.RunSudo(ctx, script)
 	if err != nil {

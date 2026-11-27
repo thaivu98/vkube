@@ -476,7 +476,13 @@ func (e *Engine) runCNIAndPostConfig(ctx context.Context, state *ClusterState, k
 USER_HOME="$(getent passwd %s | cut -d: -f6)"
 F="$USER_HOME/.vkube-tmp/cilium.yaml"
 trap 'rm -f "$F"' EXIT
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts -f "$F"`, cp1User)
+for attempt in 1 2 3; do
+  if /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts -f "$F"; then
+    exit 0
+  fi
+  sleep 5
+done
+exit 1`, cp1User)
 		if _, err := cp1Runner.RunSudo(ctx, ciliumCmd); err != nil {
 			return fmt.Errorf("apply Cilium eBPF CNI: %w", err)
 		}
@@ -491,7 +497,13 @@ if ! grep -qF 'value: "%s"' "$CALICO_FILE"; then
   echo "ERROR: failed to patch CALICO_IPV4POOL_CIDR=%s into $CALICO_FILE" >&2
   exit 1
 fi
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$CALICO_FILE"
+for attempt in 1 2 3; do
+  if /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts -f "$CALICO_FILE"; then
+    exit 0
+  fi
+  sleep 5
+done
+exit 1
 `, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
 
 		if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
