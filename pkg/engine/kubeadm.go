@@ -297,13 +297,19 @@ func (e *Engine) execKubeadmJoin(ctx context.Context, state *ClusterState, node 
 		return err
 	}
 	sshUser := state.Config.EffectiveSSH(node).User
+	joinFlags := ""
+	if node.Role == api.RoleControlPlane {
+		if f := state.Facts[node.Name]; f != nil && f.MemoryMB > 0 && f.MemoryMB < 1750 {
+			joinFlags = " --ignore-preflight-errors=Mem"
+		}
+	}
 	cmd := fmt.Sprintf(`set -euo pipefail
 USER_HOME="$(getent passwd %s | cut -d: -f6)"
 mkdir -p -m 0700 /etc/vkube
 install -m 0600 "$USER_HOME/.vkube-tmp/kubeadm-join.yaml" /etc/vkube/kubeadm-join.yaml
 rm -f "$USER_HOME/.vkube-tmp/kubeadm-join.yaml"
 trap 'rm -f /etc/vkube/kubeadm-join.yaml' EXIT
-/usr/local/bin/kubeadm join --config=/etc/vkube/kubeadm-join.yaml`, sshUser)
+/usr/local/bin/kubeadm join --config=/etc/vkube/kubeadm-join.yaml%s`, sshUser, joinFlags)
 	_, err := r.RunSudo(ctx, cmd)
 	return err
 }

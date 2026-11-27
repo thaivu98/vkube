@@ -6,9 +6,10 @@
 - **Task đang thực hiện:** Chưa có (chờ chọn task đầu tiên của v0.2)
 - **Vừa hoàn thành:**
   - Phát hành chính thức tag **`v1.32.2-vkube.1`** kèm GitHub Actions tự động build 6 binary đa nền tảng + `SHA256SUMS` và script cài 1 dòng `scripts/install.sh` (tự verify SHA256).
-  - Kiểm thử E2E thành công trên cụm 3 VM Ubuntu ARM64 thật (`master` + `worker-1` + `worker-2`):
-    - **Offline Bundle (3 nodes + đủ 4 Core Addons):** **2 phút 29 giây (`2m29s`)**.
-    - **Online trực tiếp (3 nodes + đủ 4 Core Addons + verify SHA256 + SSH TOFU):** **2 phút 43 giây (`2m43s`)**.
+  - Kiểm thử E2E thành công trên cụm 3 VM Ubuntu ARM64 thật:
+    - **Offline Bundle (1 CP + 2 Worker + đủ 4 Core Addons):** **2 phút 29 giây (`2m29s`)**.
+    - **Online trực tiếp (1 CP + 2 Worker + đủ 4 Core Addons + verify SHA256 + SSH TOFU):** **2 phút 43 giây (`2m43s`)**.
+    - **3-Control-Plane HA + `kube-vip` VIP (Online, 3× `etcd` Raft + `JoinConfiguration v1beta4` `controlPlane.certificateKey`):** **100% thành công** (3/3 Control Plane `Ready`, `kubectl` truy cập trực tiếp qua VIP `:6443`; đã xử lý `--ignore-preflight-errors=Mem` cho Secondary CP RAM 2GB và dọn địa chỉ `VIP/32` tồn dư khi chạy `vkube reset`).
   - Hoàn thiện đợt **Hardening bảo mật & độ tin cậy** từ cross-review (SSH TOFU `known_hosts` + `ssh-agent` + passphrase, Online SHA256 verify trên node, bỏ `/tmp` dùng `~/.vkube-tmp` `0600`, `vkube reset` chỉ xóa chain `KUBE-*/cali-*`, DNS-1123 validation, `VKUBE_SSH_PASSWORD` env, `--node-ip` cho multi-NIC, timing từng giai đoạn và tự in `status` sau `apply`).
 - **Bước tiếp theo (Next Action):** Chọn bắt đầu **v0.2** từ các task trong Phase 6 bên dưới (gợi ý ưu tiên: **Task 12** nâng BOM K8s mới nhất + Kong 3.x, hoặc **Task 13/14** `vkube add-node` & `vkube backup`/`restore` `etcd`).
 - **Ghi chú & Ràng buộc cốt lõi:**

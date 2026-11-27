@@ -67,12 +67,22 @@ func (e *Engine) Reset(ctx context.Context, cfg *api.ClusterConfig) error {
 	defer pool.Close()
 
 	fmt.Fprintf(e.Out, "==> Đang gỡ bỏ cụm %q song song trên %d node(s)...\n", cfg.Metadata.Name, len(cfg.Spec.Nodes))
-	resetScript := `set -euo pipefail
+	vipCleanup := ""
+	if cfg.Spec.VIP != "" {
+		vipCleanup = fmt.Sprintf(`
+# Gỡ địa chỉ VIP còn sót trên card mạng sau khi kube-vip static pod dừng
+for dev in $(ip -o addr show | awk '/%s\/32/ {print $2}'); do
+  ip addr del %s/32 dev "$dev" 2>/dev/null || true
+done`, cfg.Spec.VIP, cfg.Spec.VIP)
+	}
+
+	resetScript := fmt.Sprintf(`set -euo pipefail
 if [ -x /usr/local/bin/kubeadm ]; then
   /usr/local/bin/kubeadm reset -f --cri-socket unix:///run/containerd/containerd.sock || true
 fi
 systemctl stop kubelet || true
 rm -rf /etc/kubernetes /var/lib/etcd /etc/cni/net.d /var/lib/cni /etc/vkube /var/lib/vkube /var/tmp/vkube-bundle*
+%s
 
 # Chỉ dọn các chain của Kubernetes & Calico, TUYỆT ĐỐI không flush toàn bộ firewall (ufw/SSH) của host
 if command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev/null 2>&1; then
@@ -88,7 +98,7 @@ for iface in $(ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | grep 
 done
 
 systemctl restart containerd || true
-`
+`, vipCleanup)
 	if err := pool.RunParallel(ctx, cfg.Spec.Nodes, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
 		if _, err := r.RunSudo(ctx, resetScript); err != nil {
 			return err
