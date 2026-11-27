@@ -25,6 +25,18 @@ type KubeadmInitData struct {
 	ImageRepository      string
 }
 
+// KubeadmJoinData chứa tham số render file kubeadm-join.yaml (v1beta4) để tránh lộ token/certificateKey trên command line (ps).
+type KubeadmJoinData struct {
+	APIServerEndpoint        string
+	Token                    string
+	DiscoveryTokenCACertHash string
+	NodeName                 string
+	ImagePullPolicy          string
+	IsControlPlane           bool
+	AdvertiseAddress         string
+	CertificateKey           string
+}
+
 // KubeVipData chứa tham số render static pod kube-vip.yaml cho HA Control Plane.
 type KubeVipData struct {
 	Image           string
@@ -62,6 +74,14 @@ func RenderKubeadmInit(data KubeadmInitData) ([]byte, error) {
 		data.ImageRepository = "registry.k8s.io"
 	}
 	return render("files/kubeadm-init.yaml.tmpl", data)
+}
+
+// RenderKubeadmJoin render file JoinConfiguration (v1beta4) với quyền 0600 (không truyền secret trên CLI).
+func RenderKubeadmJoin(data KubeadmJoinData) ([]byte, error) {
+	if data.ImagePullPolicy == "" {
+		data.ImagePullPolicy = "Never"
+	}
+	return render("files/kubeadm-join.yaml.tmpl", data)
 }
 
 // RenderKubeVip render manifest static pod kube-vip cho HA Control Plane (chế độ ARP L2).

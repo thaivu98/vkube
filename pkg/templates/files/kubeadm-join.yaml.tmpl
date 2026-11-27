@@ -1,0 +1,19 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: "{{ .APIServerEndpoint }}"
+    token: "{{ .Token }}"
+    caCertHashes:
+      - "{{ .DiscoveryTokenCACertHash }}"
+nodeRegistration:
+  name: "{{ .NodeName }}"
+  criSocket: "unix:///run/containerd/containerd.sock"
+  imagePullPolicy: {{ .ImagePullPolicy }}
+{{- if .IsControlPlane }}
+controlPlane:
+  localAPIEndpoint:
+    advertiseAddress: "{{ .AdvertiseAddress }}"
+    bindPort: 6443
+  certificateKey: "{{ .CertificateKey }}"
+{{- end }}

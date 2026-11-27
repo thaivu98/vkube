@@ -35,6 +35,7 @@ type ArtifactSpec struct {
 	Component string `yaml:"component" json:"component"`
 	Type      string `yaml:"type" json:"type"`
 	URL       string `yaml:"url" json:"url"`
+	SHA256    string `yaml:"sha256,omitempty" json:"sha256,omitempty"`
 	SHA256URL string `yaml:"sha256Url,omitempty" json:"sha256Url,omitempty"`
 	Dest      string `yaml:"dest" json:"dest"`
 }
@@ -63,6 +64,7 @@ type ResolvedArtifact struct {
 	Version   string
 	Type      string
 	URL       string
+	SHA256    string
 	SHA256URL string
 	Dest      string
 }
@@ -197,6 +199,7 @@ func (b *BOM) Resolve(arch string) (*ResolvedBOM, error) {
 			Version:   ver,
 			Type:      a.Type,
 			URL:       urlStr,
+			SHA256:    strings.ToLower(strings.TrimSpace(a.SHA256)),
 			SHA256URL: shaURL,
 			Dest:      a.Dest,
 		})

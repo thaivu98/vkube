@@ -78,30 +78,35 @@ artifacts:
     component: calico
     type: manifest
     url: https://raw.githubusercontent.com/projectcalico/calico/{{.Version}}/manifests/calico.yaml
+    sha256: 999fe49427009aa1e6cc627061f9d54142c0d9dbe764350a70b4a5ac23c16afc
     dest: manifests/calico.yaml
 
   - name: metrics-server-manifest
     component: metrics_server
     type: manifest
     url: https://github.com/kubernetes-sigs/metrics-server/releases/download/{{.Version}}/components.yaml
+    sha256: f103539a54ed72efe66616afc74a8bfaed651703cb3918797599046af5617441
     dest: manifests/metrics-server.yaml
 
   - name: local-path-manifest
     component: local_path
     type: manifest
     url: https://raw.githubusercontent.com/rancher/local-path-provisioner/{{.Version}}/deploy/local-path-storage.yaml
+    sha256: fe682186b00400fe7e2b72bae16f63e47a56a6dcc677938c6642139ef670045e
     dest: manifests/local-path-storage.yaml
 
   - name: metallb-manifest
     component: metallb
     type: manifest
     url: https://raw.githubusercontent.com/metallb/metallb/{{.Version}}/config/manifests/metallb-native.yaml
+    sha256: 951065e85692aa106f1bb5d5a487d9306154923a794ab1d82122881cbaf588e4
     dest: manifests/metallb-native.yaml
 
   - name: kong-manifest
     component: kong_manifest
     type: manifest
     url: https://raw.githubusercontent.com/Kong/kubernetes-ingress-controller/{{.Version}}/deploy/single/all-in-one-dbless.yaml
+    sha256: 78c1f35bf8823618f5ec3a0b141a553bb399638705ebd4d118ad7c84cd6d284b
     dest: manifests/kong-dbless.yaml
 
 imageGroups:

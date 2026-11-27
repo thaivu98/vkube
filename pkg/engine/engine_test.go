@@ -157,11 +157,22 @@ func TestRenderRegistryHostsToml(t *testing.T) {
 
 func TestKubeletExtraArgsCmd_IPvsDNS(t *testing.T) {
 	ipCmd := kubeletExtraArgsCmd("192.0.2.10")
-	if !strings.Contains(ipCmd, `--node-ip=192.0.2.10`) {
-		t.Errorf("expected --node-ip for IP host, got: %s", ipCmd)
+	if !strings.Contains(ipCmd, `--node-ip=192.0.2.10`) || !strings.Contains(ipCmd, `20-vkube-node-ip.conf`) {
+		t.Errorf("expected systemd drop-in with --node-ip for IP host, got: %s", ipCmd)
 	}
 	dnsCmd := kubeletExtraArgsCmd("worker-1.internal.local")
 	if strings.Contains(dnsCmd, `--node-ip`) {
 		t.Errorf("DNS host must not set --node-ip, got: %s", dnsCmd)
+	}
+}
+
+func TestParseJoinCommand(t *testing.T) {
+	raw := "kubeadm join 192.0.2.100:6443 --token abcdef.0123456789abcdef --discovery-token-ca-cert-hash sha256:1234abcd\n"
+	ep, tok, hash, err := parseJoinCommand(raw)
+	if err != nil {
+		t.Fatalf("parseJoinCommand failed: %v", err)
+	}
+	if ep != "192.0.2.100:6443" || tok != "abcdef.0123456789abcdef" || hash != "sha256:1234abcd" {
+		t.Fatalf("unexpected parsed values: ep=%q tok=%q hash=%q", ep, tok, hash)
 	}
 }

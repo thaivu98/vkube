@@ -44,7 +44,7 @@ _Đo trực tiếp trên cụm lab VMware Fusion ARM64 (Ubuntu 26.10, 2 vCPU / 2
 | :----------------------------------------------------------------- | :--------------- | :------------------------------------ |
 | **2 nodes** (1 CP + 1 Worker, K8s `v1.32.2` + Calico)              | Offline Bundle   | **2 phút 4 giây** _(đã đo thực tế)_   |
 | **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Offline Bundle   | **2 phút 29 giây** _(đã đo thực tế)_  |
-| **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Online trực tiếp | **~2 phút 20 giây** _(đã đo thực tế)_ |
+| **3 nodes** (1 CP + 2 Workers + Kong, MetalLB, Metrics, LocalPath) | Online trực tiếp | **2 phút 43 giây** _(đã đo thực tế)_  |
 
 ---
 

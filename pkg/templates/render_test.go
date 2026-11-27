@@ -70,3 +70,31 @@ func TestRenderKubeVip(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderKubeadmJoin(t *testing.T) {
+	out, err := RenderKubeadmJoin(KubeadmJoinData{
+		APIServerEndpoint:        "192.0.2.100:6443",
+		Token:                    "abcdef.0123456789abcdef",
+		DiscoveryTokenCACertHash: "sha256:deadbeef",
+		NodeName:                 "cp-2",
+		ImagePullPolicy:          "IfNotPresent",
+		IsControlPlane:           true,
+		AdvertiseAddress:         "192.0.2.12",
+		CertificateKey:           "certkey123",
+	})
+	if err != nil {
+		t.Fatalf("RenderKubeadmJoin failed: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"kind: JoinConfiguration",
+		`apiServerEndpoint: "192.0.2.100:6443"`,
+		`token: "abcdef.0123456789abcdef"`,
+		`certificateKey: "certkey123"`,
+		`advertiseAddress: "192.0.2.12"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("expected %q in rendered JoinConfiguration:\n%s", want, s)
+		}
+	}
+}

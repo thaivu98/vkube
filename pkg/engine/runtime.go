@@ -195,12 +195,14 @@ func decompressZstdToTempTar(zstPath string) (string, error) {
 	return outPath, nil
 }
 
-// kubeletExtraArgsCmd chỉ sinh dòng cấu hình --node-ip khi host là IP hợp lệ (tránh lỗi kubelet nếu host là tên DNS).
+// kubeletExtraArgsCmd dùng systemd drop-in riêng (20-vkube-node-ip.conf) thay vì ghi đè /etc/default/kubelet,
+// và chỉ gắn --node-ip khi host là địa chỉ IP hợp lệ (tránh lỗi kubelet nếu host là tên DNS).
 func kubeletExtraArgsCmd(host string) string {
-	if net.ParseIP(strings.TrimSpace(host)) != nil {
-		return fmt.Sprintf(`printf 'KUBELET_EXTRA_ARGS="--node-ip=%s"\n' > /etc/default/kubelet`, strings.TrimSpace(host))
+	trimmed := strings.TrimSpace(host)
+	if net.ParseIP(trimmed) != nil {
+		return fmt.Sprintf(`printf '[Service]\nEnvironment="KUBELET_EXTRA_ARGS=--node-ip=%s"\n' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf`, trimmed)
 	}
-	return "rm -f /etc/default/kubelet"
+	return "rm -f /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf"
 }
 
 // runRuntimeOnline tải trực tiếp binaries & manifests song song trên từng node,
@@ -261,13 +263,17 @@ verify_sha256() {
 			case versions.ArtifactTypeBinary:
 				destPath := path.Join("/usr/local/bin", path.Base(art.Dest))
 				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
-				if art.SHA256URL != "" {
+				if art.SHA256 != "" {
+					dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
+				} else if art.SHA256URL != "" {
 					dlCmds = append(dlCmds, fmt.Sprintf("verify_sha256 %s %q %q", dlTarget, art.SHA256URL, urlFile))
 				}
 				dlCmds = append(dlCmds, fmt.Sprintf("install -m 0755 %s %q && rm -f %s", dlTarget, destPath, dlTarget))
 			case versions.ArtifactTypeTarball:
 				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
-				if art.SHA256URL != "" {
+				if art.SHA256 != "" {
+					dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
+				} else if art.SHA256URL != "" {
 					dlCmds = append(dlCmds, fmt.Sprintf("verify_sha256 %s %q %q", dlTarget, art.SHA256URL, urlFile))
 				}
 				switch art.Dest {
@@ -283,7 +289,13 @@ verify_sha256() {
 			case versions.ArtifactTypeManifest:
 				if node.Role == api.RoleControlPlane {
 					destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
-					dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %q", art.URL, destPath))
+					dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+					if art.SHA256 != "" {
+						dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
+					} else if art.SHA256URL != "" {
+						dlCmds = append(dlCmds, fmt.Sprintf("verify_sha256 %s %q %q", dlTarget, art.SHA256URL, urlFile))
+					}
+					dlCmds = append(dlCmds, fmt.Sprintf("install -m 0644 %s %q && rm -f %s", dlTarget, destPath, dlTarget))
 				}
 			}
 		}

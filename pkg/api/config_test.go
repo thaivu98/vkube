@@ -74,7 +74,7 @@ spec:
     password: "test-pass"
   nodes:
     - name: cp-1
-      host: cp-1.internal.local
+      host: 192.0.2.10
       role: control-plane
     - name: worker-1
       host: worker-1.internal.local
@@ -85,7 +85,7 @@ spec:
 `
 	cfg, err := ParseClusterConfig([]byte(raw))
 	if err != nil {
-		t.Fatalf("expected valid config with empty label value and DNS host, got error: %v", err)
+		t.Fatalf("expected valid config with empty label value and worker DNS host, got error: %v", err)
 	}
 	if _, ok := cfg.Workers()[0].Labels["node-role.kubernetes.io/worker"]; !ok {
 		t.Fatalf("expected empty-value label to be preserved")
@@ -260,6 +260,17 @@ spec:
     - { name: Worker_1, host: 10.0.0.1, role: control-plane }
 `,
 			wantErr: "must be a valid lowercase DNS-1123 name",
+		},
+		{
+			name: "control-plane host must be IP not DNS",
+			yaml: `
+spec:
+  arch: arm64
+  ssh: { password: "test-pass" }
+  nodes:
+    - { name: cp-1, host: cp-1.internal.local, role: control-plane }
+`,
+			wantErr: "must be a valid IP address for control-plane nodes",
 		},
 	}
 

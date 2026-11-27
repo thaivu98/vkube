@@ -216,13 +216,16 @@ rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
 		}
 	}
 
-	// Lấy lệnh kubeadm join nếu cụm có thêm CP phụ hoặc Worker
+	// Lấy token/hash từ CP-1 và dùng JoinConfiguration (file 0600) để không bao giờ lộ token/certificateKey trên `ps`
 	if len(cps) > 1 || len(workers) > 0 {
 		res, err := cp1Runner.RunSudo(ctx, "/usr/local/bin/kubeadm token create --print-join-command")
 		if err != nil {
 			return fmt.Errorf("create kubeadm join command: %w", err)
 		}
-		baseJoinCmd := strings.TrimSpace(res.Stdout)
+		endpoint, token, caHash, err := parseJoinCommand(res.Stdout)
+		if err != nil {
+			return fmt.Errorf("parse kubeadm join command: %w", err)
+		}
 
 		// 3. Join các Secondary Control Planes TUẦN TỰ từng node để đảm bảo an toàn cho etcd Raft quorum
 		if len(cps) > 1 {
@@ -232,10 +235,21 @@ rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
 				if err != nil {
 					return err
 				}
-				joinCmd := fmt.Sprintf("%s --control-plane --certificate-key %s --node-name %s --apiserver-advertise-address %s --cri-socket unix:///run/containerd/containerd.sock",
-					baseJoinCmd, certKey, cp.Name, cp.Host)
+				joinYAML, err := templates.RenderKubeadmJoin(templates.KubeadmJoinData{
+					APIServerEndpoint:        endpoint,
+					Token:                    token,
+					DiscoveryTokenCACertHash: caHash,
+					NodeName:                 cp.Name,
+					ImagePullPolicy:          pullPolicy,
+					IsControlPlane:           true,
+					AdvertiseAddress:         cp.Host,
+					CertificateKey:           certKey,
+				})
+				if err != nil {
+					return fmt.Errorf("render kubeadm-join.yaml for %s: %w", cp.Name, err)
+				}
 				fmt.Fprintf(e.Out, "  [join-cp]   %-12s joining cluster...\n", cp.Name)
-				if _, err := r.RunSudo(ctx, joinCmd); err != nil {
+				if err := e.execKubeadmJoin(ctx, state, cp, r, joinYAML); err != nil {
 					return fmt.Errorf("kubeadm join control-plane on %s: %w", cp.Name, err)
 				}
 				if state.Config.Spec.VIP != "" {
@@ -251,9 +265,18 @@ rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
 		if len(workers) > 0 {
 			fmt.Fprintf(e.Out, "==> [5/6] Join %d Worker Node(s) song song...\n", len(workers))
 			err := state.Pool.RunParallel(ctx, workers, func(ctx context.Context, node api.NodeConfig, r ssh.Runner) error {
-				joinCmd := fmt.Sprintf("%s --node-name %s --cri-socket unix:///run/containerd/containerd.sock",
-					baseJoinCmd, node.Name)
-				if _, err := r.RunSudo(ctx, joinCmd); err != nil {
+				joinYAML, err := templates.RenderKubeadmJoin(templates.KubeadmJoinData{
+					APIServerEndpoint:        endpoint,
+					Token:                    token,
+					DiscoveryTokenCACertHash: caHash,
+					NodeName:                 node.Name,
+					ImagePullPolicy:          pullPolicy,
+					IsControlPlane:           false,
+				})
+				if err != nil {
+					return fmt.Errorf("render kubeadm-join.yaml: %w", err)
+				}
+				if err := e.execKubeadmJoin(ctx, state, node, r, joinYAML); err != nil {
 					return fmt.Errorf("kubeadm join worker: %w", err)
 				}
 				fmt.Fprintf(e.Out, "  [join-wk]   %-12s OK\n", node.Name)
@@ -266,6 +289,47 @@ rm -f "$USER_HOME/.vkube-tmp/kubeadm-init.yaml"
 	}
 
 	return nil
+}
+
+func (e *Engine) execKubeadmJoin(ctx context.Context, state *ClusterState, node api.NodeConfig, r ssh.Runner, joinYAML []byte) error {
+	if err := r.WriteFile(ctx, joinYAML, ".vkube-tmp/kubeadm-join.yaml", 0o600); err != nil {
+		return err
+	}
+	sshUser := state.Config.EffectiveSSH(node).User
+	cmd := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p -m 0700 /etc/vkube
+install -m 0600 "$USER_HOME/.vkube-tmp/kubeadm-join.yaml" /etc/vkube/kubeadm-join.yaml
+rm -f "$USER_HOME/.vkube-tmp/kubeadm-join.yaml"
+trap 'rm -f /etc/vkube/kubeadm-join.yaml' EXIT
+/usr/local/bin/kubeadm join --config=/etc/vkube/kubeadm-join.yaml`, sshUser)
+	_, err := r.RunSudo(ctx, cmd)
+	return err
+}
+
+// parseJoinCommand tách apiServerEndpoint, token và discovery-token-ca-cert-hash từ output của `kubeadm token create --print-join-command`.
+func parseJoinCommand(out string) (endpoint, token, caHash string, err error) {
+	fields := strings.Fields(strings.TrimSpace(out))
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "join":
+			if i+1 < len(fields) && endpoint == "" {
+				endpoint = fields[i+1]
+			}
+		case "--token":
+			if i+1 < len(fields) {
+				token = fields[i+1]
+			}
+		case "--discovery-token-ca-cert-hash":
+			if i+1 < len(fields) {
+				caHash = fields[i+1]
+			}
+		}
+	}
+	if endpoint == "" || token == "" || caHash == "" {
+		return "", "", "", fmt.Errorf("unexpected kubeadm join output: %q", strings.TrimSpace(out))
+	}
+	return endpoint, token, caHash, nil
 }
 
 func (e *Engine) writeKubeVipManifest(ctx context.Context, state *ClusterState, node api.NodeConfig, r ssh.Runner, kubeconfigPath string) error {
@@ -330,8 +394,7 @@ if ! grep -qF 'value: "%s"' "$CALICO_FILE"; then
   exit 1
 fi
 /usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f "$CALICO_FILE"
-/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system set env daemonset/calico-node CALICO_IPV4POOL_CIDR=%q
-`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
+`, remoteManifestDir, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet, state.Config.Spec.Networking.PodSubnet)
 
 	if _, err := cp1Runner.RunSudo(ctx, calicoScript); err != nil {
 		return fmt.Errorf("apply offline Calico CNI: %w", err)

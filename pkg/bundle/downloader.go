@@ -39,7 +39,12 @@ func downloadArtifact(ctx context.Context, client *http.Client, art versions.Res
 		return fmt.Errorf("download artifact %q: %w", art.Name, err)
 	}
 
-	if art.SHA256URL != "" {
+	if art.SHA256 != "" {
+		if !strings.EqualFold(actualSHA, art.SHA256) {
+			return fmt.Errorf("pinned sha256 mismatch for %q: expected %s, got %s", art.Name, art.SHA256, actualSHA)
+		}
+		fmt.Fprintf(out, "  [verify]   %-16s pinned sha256 OK (%s...)\n", art.Name, actualSHA[:12])
+	} else if art.SHA256URL != "" {
 		expectedSHA, err := fetchSHA256(ctx, client, art.SHA256URL, path.Base(art.URL))
 		if err != nil {
 			return fmt.Errorf("fetch sha256 for %q: %w", art.Name, err)

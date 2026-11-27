@@ -150,6 +150,10 @@ func (c *ClusterConfig) Validate() error {
 		switch n.Role {
 		case RoleControlPlane:
 			cpCount++
+			// kubeadm init (advertiseAddress) và join --control-plane bắt buộc host của Control Plane là địa chỉ IP.
+			if strings.TrimSpace(n.Host) != "" && net.ParseIP(strings.TrimSpace(n.Host)) == nil {
+				errs = append(errs, fmt.Sprintf("%s.host %q must be a valid IP address for control-plane nodes (kubeadm advertiseAddress requires an IP)", prefix, n.Host))
+			}
 		case RoleWorker:
 		default:
 			errs = append(errs, fmt.Sprintf("%s.role %q must be %q or %q", prefix, n.Role, RoleControlPlane, RoleWorker))

@@ -129,14 +129,20 @@ echo "OK"
 			iface = state.Facts[cp1.Name].DefaultInterface
 		}
 		fmt.Fprintf(e.Out, "  [preflight] Kiểm tra VIP %s chưa bị thiết bị nào khác chiếm dụng trong LAN...\n", state.Config.Spec.VIP)
-		// Chỉ dùng iputils arping -D khi xác nhận đúng bản hỗ trợ cờ -D; các trường hợp khác fallback ping an toàn.
-		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && arping -h 2>&1 | grep -q -- '-D' && [ -n %q ]; then
+		// Chỉ dùng iputils arping -D khi xác nhận đúng bản iputils; nếu rc khác 0/1 (ví dụ lỗi 2) thì fallback ping.
+		checkCmd := fmt.Sprintf(`if command -v arping >/dev/null 2>&1 && arping -V 2>&1 | grep -qi iputils && [ -n %q ]; then
   arping -D -I %q -c 2 -w 2 %s >/dev/null 2>&1
   rc=$?
-  if [ "$rc" -eq 1 ]; then echo IN_USE; else echo FREE; fi
+  if [ "$rc" -eq 0 ]; then
+    echo FREE
+  elif [ "$rc" -eq 1 ]; then
+    echo IN_USE
+  else
+    ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE
+  fi
 else
   ping -c 1 -W 1 %s >/dev/null 2>&1 && echo IN_USE || echo FREE
-fi`, iface, iface, state.Config.Spec.VIP, state.Config.Spec.VIP)
+fi`, iface, iface, state.Config.Spec.VIP, state.Config.Spec.VIP, state.Config.Spec.VIP)
 		res, err := cp1Runner.RunSudo(ctx, checkCmd)
 		if err != nil {
 			return fmt.Errorf("check VIP availability on %s: %w", cp1.Name, err)
