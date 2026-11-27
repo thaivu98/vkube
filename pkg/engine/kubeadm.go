@@ -228,12 +228,23 @@ rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)
 		return err
 	}
 
-	// Nếu bật CISHardening, tạo sẵn thư mục audit log & siết quyền file cấu hình Control Plane chuẩn CIS
+	// Nếu bật CISHardening, tạo sẵn thư mục audit log + ghi file /etc/kubernetes/audit/audit-policy.yaml trên mọi Control Plane
 	if state.Config.Spec.ControlPlane.CISHardening {
-		_ = state.Pool.RunParallel(ctx, cps, func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
-			_, err := r.RunSudo(ctx, "mkdir -p -m 0700 /var/log/kubernetes/audit")
+		auditPolicy := templates.DefaultAuditPolicy()
+		if err := state.Pool.RunParallel(ctx, cps, func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
+			if err := r.WriteFile(ctx, auditPolicy, ".vkube-tmp/audit-policy.yaml", 0o600); err != nil {
+				return err
+			}
+			u := state.Config.EffectiveSSH(cp).User
+			_, err := r.RunSudo(ctx, fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p -m 0700 /etc/kubernetes/audit /var/log/kubernetes/audit
+install -m 0600 "$USER_HOME/.vkube-tmp/audit-policy.yaml" /etc/kubernetes/audit/audit-policy.yaml
+rm -f "$USER_HOME/.vkube-tmp/audit-policy.yaml"`, u))
 			return err
-		})
+		}); err != nil {
+			return fmt.Errorf("install audit policy on control planes: %w", err)
+		}
 	}
 
 	cp1User := state.Config.EffectiveSSH(cp1).User

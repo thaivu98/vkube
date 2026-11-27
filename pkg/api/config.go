@@ -114,6 +114,7 @@ func (c *ClusterConfig) ApplyDefaults() {
 		}
 		for k, v := range map[string]string{
 			"profiling":           "false",
+			"audit-policy-file":   "/etc/kubernetes/audit/audit-policy.yaml",
 			"audit-log-maxage":    "30",
 			"audit-log-maxbackup": "10",
 			"audit-log-maxsize":   "100",
@@ -145,6 +146,11 @@ func (c *ClusterConfig) ApplyDefaults() {
 	// Giá trị mặc định & đọc secret từ biến môi trường cho cấu hình Backup (local / s3 / sftp)
 	if c.Spec.Backup.Target == "" {
 		c.Spec.Backup.Target = BackupTargetLocal
+	}
+	if c.Spec.Backup.EncryptionPassphrase == "" {
+		if v := os.Getenv("VKUBE_BACKUP_PASSPHRASE"); v != "" {
+			c.Spec.Backup.EncryptionPassphrase = v
+		}
 	}
 	if c.Spec.Backup.S3 != nil {
 		if c.Spec.Backup.S3.Region == "" {

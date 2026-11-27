@@ -41,13 +41,27 @@ apiServer:
       value: "{{ .Value }}"
 {{- end }}
 {{- end }}
-{{- if .EncryptSecrets }}
+{{- if or .EncryptSecrets .CISHardening }}
   extraVolumes:
+{{- if .EncryptSecrets }}
     - name: vkube-enc
       hostPath: "/etc/kubernetes/enc"
       mountPath: "/etc/kubernetes/enc"
       readOnly: true
       pathType: DirectoryOrCreate
+{{- end }}
+{{- if .CISHardening }}
+    - name: vkube-audit-policy
+      hostPath: "/etc/kubernetes/audit"
+      mountPath: "/etc/kubernetes/audit"
+      readOnly: true
+      pathType: DirectoryOrCreate
+    - name: vkube-audit-log
+      hostPath: "/var/log/kubernetes/audit"
+      mountPath: "/var/log/kubernetes/audit"
+      readOnly: false
+      pathType: DirectoryOrCreate
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if .ControllerManagerExtraArgs }}

@@ -190,11 +190,75 @@ func TestContainerdConfigPatchCmd(t *testing.T) {
 		`sandbox_image = "registry.k8s.io/pause:3.10.2"`,
 		`sandbox = `,
 		`registry.k8s.io/pause:3.10.2`,
-		`config_path = "/etc/containerd/certs.d"`,
+		`io\.containerd\.(cri\.v1\.images|grpc\.v1\.cri).*\.registry\]`,
+		`/etc/containerd/certs.d`,
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("expected %q in containerdConfigPatchCmd:\n%s", want, cmd)
 		}
+	}
+}
+
+func TestSecurityReviewRegressionFixes(t *testing.T) {
+	// 1. parseEtcdMemberID: 10.0.0.1 MUST NOT match 10.0.0.12 (prefix bug fixed)
+	memberOut := "aaaa2222, started, cp-2, https://10.0.0.12:2380, https://10.0.0.12:2379, false\nbbbb1111, started, cp-1, https://10.0.0.1:2380, https://10.0.0.1:2379, false\n"
+	if id := parseEtcdMemberID(memberOut, "cp-1", "10.0.0.1"); id != "bbbb1111" {
+		t.Fatalf("expected cp-1 ID bbbb1111, got %q", id)
+	}
+	if id := parseEtcdMemberID(memberOut, "", "10.0.0.1"); id != "bbbb1111" {
+		t.Fatalf("expected exact IP match bbbb1111 (not 10.0.0.12), got %q", id)
+	}
+	if id := parseEtcdMemberID("aaaa2222, started, cp-2, https://10.0.0.12:2380, https://10.0.0.12:2379, false\n", "", "10.0.0.1"); id != "" {
+		t.Fatalf("expected empty match when only 10.0.0.12 exists, got %q", id)
+	}
+
+	// 2. AES-256-GCM Backup Encryption round-trip, wrong passphrase & tamper detection
+	dir := t.TempDir()
+	plainPath := filepath.Join(dir, "plain.tar.gz")
+	encPath := filepath.Join(dir, "enc.tar.gz")
+	decPath := filepath.Join(dir, "dec.tar.gz")
+	secretData := []byte("super-secret-ca-key-and-etcd-snapshot")
+	if err := os.WriteFile(plainPath, secretData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := encryptBackupFile(plainPath, encPath, "my-strong-passphrase"); err != nil {
+		t.Fatalf("encryptBackupFile failed: %v", err)
+	}
+	if !isEncryptedBackup(encPath) {
+		t.Fatal("expected isEncryptedBackup=true")
+	}
+	if err := decryptBackupFile(encPath, decPath, "wrong-passphrase"); err == nil {
+		t.Fatal("expected error with wrong passphrase")
+	}
+	if err := decryptBackupFile(encPath, decPath, "my-strong-passphrase"); err != nil {
+		t.Fatalf("decryptBackupFile failed: %v", err)
+	}
+	got, _ := os.ReadFile(decPath)
+	if string(got) != string(secretData) {
+		t.Fatalf("decrypted content mismatch: got %q", string(got))
+	}
+	// Tamper 1 byte -> GCM auth tag MUST reject
+	tampered, _ := os.ReadFile(encPath)
+	tampered[len(tampered)-1] ^= 0xff
+	tamperedPath := filepath.Join(dir, "tampered.tar.gz")
+	_ = os.WriteFile(tamperedPath, tampered, 0o600)
+	if err := decryptBackupFile(tamperedPath, decPath, "my-strong-passphrase"); err == nil {
+		t.Fatal("expected GCM authentication error on tampered backup")
+	}
+
+	// 3. kubeletExtraArgs with '%' must use heredoc (not printf) and escape '%' -> '%%'
+	cmd := kubeletExtraArgsCmd("10.0.0.1", map[string]string{"eviction-hard": "imagefs.available<15%"})
+	if strings.Contains(cmd, "printf ") {
+		t.Errorf("kubeletExtraArgsCmd must not use printf (breaks on '%%'): %s", cmd)
+	}
+	if !strings.Contains(cmd, "imagefs.available<15%%") {
+		t.Errorf("expected systemd '%%%%' escaping in kubeletExtraArgsCmd:\n%s", cmd)
+	}
+
+	// 4. parseNodeVersions for upgrade resume
+	vers := parseNodeVersions("cp-1      v1.36.8\nworker-1  v1.36.7\n")
+	if vers["cp-1"] != "v1.36.8" || vers["worker-1"] != "v1.36.7" {
+		t.Fatalf("unexpected parseNodeVersions: %+v", vers)
 	}
 }
 

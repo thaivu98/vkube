@@ -28,6 +28,7 @@ type BackupOptions struct {
 // RestoreOptions chứa tham số cho lệnh `vkube restore`.
 type RestoreOptions struct {
 	BackupPath           string // Đường dẫn file backup .tar.gz trên máy Deployer hoặc URI s3:// / sftp://
+	ExpectedSHA256       string // Tùy chọn: xác thực SHA256 của file backup trước khi khôi phục
 	ForceClusterMismatch bool   // Cho phép khôi phục ngay cả khi tên cụm trong backup-metadata.json khác cluster.yaml
 }
 
@@ -123,11 +124,16 @@ fi
 mv /var/lib/etcd/vkube-snapshot.db "$BDIR/etcd-snapshot.db"
 cp -a /etc/kubernetes/pki "$BDIR/pki"
 cp -a /etc/kubernetes/admin.conf "$BDIR/admin.conf"
+EXTRA_DIRS=""
+if [ -d /etc/kubernetes/enc ]; then
+  cp -a /etc/kubernetes/enc "$BDIR/enc"
+  EXTRA_DIRS="enc"
+fi
 cat <<EOF > "$BDIR/backup-metadata.json"
 {"cluster":"%s","controlPlane":"%s","createdAt":"%s"}
 EOF
 
-tar -czf "$OUT_ARCHIVE" -C "$BDIR" etcd-snapshot.db pki admin.conf backup-metadata.json
+tar -czf "$OUT_ARCHIVE" -C "$BDIR" etcd-snapshot.db pki admin.conf backup-metadata.json $EXTRA_DIRS
 chown %s:%s "$OUT_ARCHIVE"
 chmod 0600 "$OUT_ARCHIVE"
 `, cp1User, cfg.Metadata.Name, cp1.Name, time.Now().UTC().Format(time.RFC3339), cp1User, cp1User)
@@ -148,6 +154,22 @@ chmod 0600 "$OUT_ARCHIVE"
 		return fmt.Errorf("download backup archive: %w", dlErr)
 	}
 
+	// Mã hóa xác thực AES-256-GCM phía client nếu có mật khẩu (bảo vệ CA private key & etcd Secrets khi lưu lên S3/SFTP)
+	if pass := cfg.Spec.Backup.EncryptionPassphrase; pass != "" {
+		encTmp := localPath + ".enc.tmp"
+		if err := encryptBackupFile(localPath, encTmp, pass); err != nil {
+			_ = os.Remove(encTmp)
+			return fmt.Errorf("encrypt backup archive: %w", err)
+		}
+		if err := os.Rename(encTmp, localPath); err != nil {
+			_ = os.Remove(encTmp)
+			return err
+		}
+		fmt.Fprintf(e.Out, "  [encrypt]   Đã mã hóa xác thực bản sao lưu bằng AES-256-GCM (PBKDF2-SHA256)\n")
+	} else if target == api.BackupTargetS3 || target == api.BackupTargetSFTP {
+		fmt.Fprintf(e.Out, "  [WARN]      Bản sao lưu chứa CA private key & etcd Secrets đang được đẩy lên %s KHÔNG mã hóa! Khuyến nghị đặt biến môi trường VKUBE_BACKUP_PASSPHRASE.\n", strings.ToUpper(target))
+	}
+
 	sha, size, err := fileSHA256(localPath)
 	if err != nil {
 		return err
@@ -158,6 +180,9 @@ chmod 0600 "$OUT_ARCHIVE"
 	var remoteURI string
 	switch target {
 	case api.BackupTargetS3:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.Spec.Backup.S3.Endpoint)), "http://") {
+			fmt.Fprintf(e.Out, "  [WARN]      Endpoint S3 đang dùng HTTP thường (%s) — khuyến nghị chuyển sang HTTPS.\n", cfg.Spec.Backup.S3.Endpoint)
+		}
 		objectKey := fileName
 		if prefix := strings.Trim(cfg.Spec.Backup.S3.Prefix, "/"); prefix != "" {
 			objectKey = path.Join(prefix, fileName)
@@ -256,6 +281,34 @@ func (e *Engine) Restore(ctx context.Context, cfg *api.ClusterConfig, opts Resto
 		}
 	}
 
+	// Xác thực SHA256 nếu người dùng truyền --sha256 (chống archive bị sửa đổi trên S3/SFTP)
+	if wantSHA := strings.ToLower(strings.TrimSpace(opts.ExpectedSHA256)); wantSHA != "" {
+		gotSHA, _, err := fileSHA256(localBackup)
+		if err != nil {
+			return fmt.Errorf("hash backup archive: %w", err)
+		}
+		if gotSHA != wantSHA {
+			return fmt.Errorf("backup SHA256 mismatch: expected %s, got %s", wantSHA, gotSHA)
+		}
+		fmt.Fprintf(e.Out, "  [verify]    SHA256 bản sao lưu khớp chính xác (%s)\n", gotSHA)
+	}
+
+	// Tự động giải mã AES-256-GCM nếu archive đã được mã hóa bởi `vkube backup`
+	if isEncryptedBackup(localBackup) {
+		fmt.Fprintf(e.Out, "  [decrypt]   Phát hiện bản sao lưu được mã hóa AES-256-GCM — đang giải mã & xác thực...\n")
+		decFile, err := os.CreateTemp("", "vkube-restore-dec-*.tar.gz")
+		if err != nil {
+			return err
+		}
+		decPath := decFile.Name()
+		_ = decFile.Close()
+		defer os.Remove(decPath)
+		if err := decryptBackupFile(localBackup, decPath, cfg.Spec.Backup.EncryptionPassphrase); err != nil {
+			return err
+		}
+		localBackup = decPath
+	}
+
 	fmt.Fprintf(e.Out, "==> Kiểm tra tính hợp lệ & cluster identity của bản sao lưu %s...\n", backupRef)
 	if err := verifyBackupArchive(localBackup, cfg.Metadata.Name, opts.ForceClusterMismatch); err != nil {
 		return fmt.Errorf("invalid backup archive: %w", err)
@@ -275,19 +328,27 @@ func (e *Engine) Restore(ctx context.Context, cfg *api.ClusterConfig, opts Resto
 	ts := time.Now().Format("20060102-150405")
 	fmt.Fprintf(e.Out, "==> Khôi phục etcd & PKI trên %d Control Plane(s) (chống split-brain: %s)...\n", len(cps), initialCluster)
 
-	// Giai đoạn 1: Dừng toàn bộ Control Plane song song, nạp PKI & khôi phục dữ liệu etcd mới
+	// Giai đoạn 1: Dừng toàn bộ Control Plane song song, nạp PKI + enc/ & khôi phục dữ liệu etcd mới
 	if err := pool.RunParallel(ctx, cps, func(ctx context.Context, cp api.NodeConfig, r ssh.Runner) error {
-		remoteArchive := "/var/tmp/vkube-restore.tar.gz"
-		if err := r.UploadFile(ctx, opts.BackupPath, remoteArchive); err != nil {
+		archiveBytes, err := os.ReadFile(opts.BackupPath)
+		if err != nil {
+			return fmt.Errorf("read backup archive: %w", err)
+		}
+		// Ghi vào thư mục riêng .vkube-tmp với quyền 0600 (KHÔNG dùng /var/tmp 0644 vì chứa CA private key)
+		if err := r.WriteFile(ctx, archiveBytes, ".vkube-tmp/vkube-restore.tar.gz", 0o600); err != nil {
 			return fmt.Errorf("upload backup archive: %w", err)
 		}
+		cpUser := cfg.EffectiveSSH(cp).User
+		cpNodeIP := cp.EffectiveNodeIP()
 
 		restoreScript := fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+ARCHIVE="$USER_HOME/.vkube-tmp/vkube-restore.tar.gz"
 RDIR="/var/lib/vkube/restore"
 rm -rf "$RDIR" && mkdir -p -m 0700 "$RDIR"
-trap 'rm -rf "$RDIR" %s' EXIT
+trap 'rm -rf "$RDIR" "$ARCHIVE"' EXIT
 
-tar -xzf %s -C "$RDIR"
+tar -xzf "$ARCHIVE" -C "$RDIR"
 
 # 1. Dừng kubelet & tạm chuyển static pod manifests để đảm bảo không có tiến trình nào ghi vào etcd
 systemctl stop kubelet || true
@@ -295,18 +356,25 @@ if [ -d /etc/kubernetes/manifests ]; then
   rm -rf /etc/kubernetes/manifests.vkube-restore-bak
   mv /etc/kubernetes/manifests /etc/kubernetes/manifests.vkube-restore-bak
 fi
-# Dừng các container control-plane đang chạy (nếu crictl tồn tại)
 if [ -x /usr/local/bin/crictl ]; then
   for cid in $(/usr/local/bin/crictl ps -q --name 'etcd|kube-apiserver|kube-controller-manager|kube-scheduler' 2>/dev/null || true); do
     /usr/local/bin/crictl stop "$cid" >/dev/null 2>&1 || true
   done
 fi
 
-# 2. Khôi phục /etc/kubernetes/pki (giữ bản dự phòng trước khi ghi đè)
+# 2. Khôi phục /etc/kubernetes/pki & /etc/kubernetes/enc (nếu có khóa Encryption at Rest)
 if [ -d /etc/kubernetes/pki ]; then
   mv /etc/kubernetes/pki "/etc/kubernetes/pki.bak.%s"
 fi
 cp -a "$RDIR/pki" /etc/kubernetes/pki
+if [ -d "$RDIR/enc" ]; then
+  if [ -d /etc/kubernetes/enc ]; then
+    mv /etc/kubernetes/enc "/etc/kubernetes/enc.bak.%s"
+  fi
+  cp -a "$RDIR/enc" /etc/kubernetes/enc
+  chmod 0700 /etc/kubernetes/enc
+  chmod 0600 /etc/kubernetes/enc/* 2>/dev/null || true
+fi
 if [ -f "$RDIR/admin.conf" ]; then
   install -m 0600 "$RDIR/admin.conf" /etc/kubernetes/admin.conf
 fi
@@ -348,7 +416,7 @@ if ! /usr/local/bin/ctr -n k8s.io run --rm \
 fi
 mv /var/lib/etcd/restored/* /var/lib/etcd/
 rmdir /var/lib/etcd/restored
-`, remoteArchive, remoteArchive, ts, ts, cp.Name, cp.Name, initialCluster, cp.Host, cp.Name, cp.Name, initialCluster, cp.Host)
+`, cpUser, ts, ts, ts, cp.Name, cp.Name, initialCluster, cpNodeIP, cp.Name, cp.Name, initialCluster, cpNodeIP)
 
 		fmt.Fprintf(e.Out, "  [restore]   %-12s đang khôi phục PKI & etcd snapshot...\n", cp.Name)
 		if _, err := r.RunSudo(ctx, restoreScript); err != nil {

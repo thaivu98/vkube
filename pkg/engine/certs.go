@@ -62,7 +62,7 @@ func (e *Engine) CertsRenew(ctx context.Context, cfg *api.ClusterConfig, kubecon
 /usr/local/bin/kubeadm certs renew all
 # Dừng nhẹ các container static pod để kubelet tự bật lại với bộ chứng chỉ mới
 if [ -x /usr/local/bin/crictl ]; then
-  for cid in $(/usr/local/bin/crictl ps -q --name 'kube-apiserver|kube-controller-manager|kube-scheduler|etcd' 2>/dev/null || true); do
+  for cid in $(/usr/local/bin/crictl ps -q --name 'kube-apiserver|kube-controller-manager|kube-scheduler|etcd|kube-vip' 2>/dev/null || true); do
     /usr/local/bin/crictl stop "$cid" >/dev/null 2>&1 || true
   done
 fi

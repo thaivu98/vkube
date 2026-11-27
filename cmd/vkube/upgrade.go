@@ -14,6 +14,7 @@ func newUpgradeCmd() *cobra.Command {
 		targetVersion   string
 		bundleFile      string
 		manifestPath    string
+		skipBackup      bool
 		yes             bool
 		insecureHostKey bool
 	)
@@ -39,6 +40,7 @@ func newUpgradeCmd() *cobra.Command {
 				TargetVersion: targetVersion,
 				BundlePath:    bundleFile,
 				ManifestPath:  manifestPath,
+				SkipBackup:    skipBackup,
 			})
 		},
 	}
@@ -47,6 +49,7 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&targetVersion, "target-version", "", "Phiên bản Kubernetes đích (vd: v1.36.8; bỏ trống sẽ lấy từ BOM hoặc --bundle)")
 	cmd.Flags().StringVarP(&bundleFile, "bundle", "b", "", "Đường dẫn tới Offline Bundle (.tar.zst) phiên bản mới cho môi trường Air-gapped")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Đường dẫn file BOM (versions.yaml) tùy chỉnh khi nâng cấp Online")
+	cmd.Flags().BoolVar(&skipBackup, "skip-backup", false, "Bỏ qua bước tự động backup etcd trước khi upgrade")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Xác nhận thực thi rolling upgrade")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-skip-host-key-check", false, "Bỏ qua xác thực SSH known_hosts")
 	return cmd

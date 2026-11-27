@@ -177,12 +177,13 @@ type ControlPlaneExtraConfig struct {
 
 // BackupConfig cấu hình đích lưu trữ cho lệnh `vkube backup` và `vkube restore` (local, s3/MinIO, hoặc sftp/NAS).
 type BackupConfig struct {
-	Target    string             `yaml:"target,omitempty" json:"target,omitempty"`       // local | s3 | sftp
-	Retention int                `yaml:"retention,omitempty" json:"retention,omitempty"` // Số bản backup giữ lại (0 = giữ tất cả)
-	Schedule  string             `yaml:"schedule,omitempty" json:"schedule,omitempty"`   // Biểu thức OnCalendar systemd timer (vd: "daily", "*-*-* 02:00:00")
-	Local     *LocalBackupConfig `yaml:"local,omitempty" json:"local,omitempty"`
-	S3        *S3BackupConfig    `yaml:"s3,omitempty" json:"s3,omitempty"`
-	SFTP      *SFTPBackupConfig  `yaml:"sftp,omitempty" json:"sftp,omitempty"`
+	Target               string             `yaml:"target,omitempty" json:"target,omitempty"`                             // local | s3 | sftp
+	Retention            int                `yaml:"retention,omitempty" json:"retention,omitempty"`                       // Số bản backup giữ lại (0 = giữ tất cả)
+	Schedule             string             `yaml:"schedule,omitempty" json:"schedule,omitempty"`                         // Biểu thức OnCalendar systemd timer (vd: "daily", "*-*-* 02:00:00")
+	EncryptionPassphrase string             `yaml:"encryptionPassphrase,omitempty" json:"encryptionPassphrase,omitempty"` // Mật khẩu mã hóa AES-256-GCM phía client (hoặc env VKUBE_BACKUP_PASSPHRASE)
+	Local                *LocalBackupConfig `yaml:"local,omitempty" json:"local,omitempty"`
+	S3                   *S3BackupConfig    `yaml:"s3,omitempty" json:"s3,omitempty"`
+	SFTP                 *SFTPBackupConfig  `yaml:"sftp,omitempty" json:"sftp,omitempty"`
 }
 
 // LocalBackupConfig lưu bản sao lưu về thư mục cục bộ trên máy Deployer (hoặc thư mục đã mount NFS/SMB).

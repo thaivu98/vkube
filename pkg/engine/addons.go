@@ -91,7 +91,7 @@ func (e *Engine) ApplyAddons(ctx context.Context, cfg *api.ClusterConfig, opts A
 			}
 			destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
 			fetchCmds = append(fetchCmds, fmt.Sprintf(`if [ ! -f %q ]; then
-  curl -fsSL %q -o %q
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 %q -o %q
   echo "%s  %s" | sha256sum -c - >/dev/null
 fi`, destPath, art.URL, destPath, art.SHA256, destPath))
 		}

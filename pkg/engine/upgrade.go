@@ -18,6 +18,7 @@ type UpgradeOptions struct {
 	TargetVersion string // Phiên bản K8s đích (bỏ trống sẽ lấy từ BOM hoặc Offline Bundle)
 	BundlePath    string // Nếu có -> nâng cấp Air-gapped từ Offline Bundle mới
 	ManifestPath  string // File BOM tùy chỉnh (chế độ Online)
+	SkipBackup    bool   // Bỏ qua bước tự động backup etcd trước khi upgrade
 }
 
 // Upgrade thực hiện rolling upgrade cụm Kubernetes an toàn từng node một (zero-downtime):
@@ -69,14 +70,37 @@ func (e *Engine) Upgrade(ctx context.Context, cfg *api.ClusterConfig, opts Upgra
 		return err
 	}
 
-	// Kiểm tra phiên bản hiện tại của cụm và chặn downgrade hoặc nhảy quá 1 minor version
-	curRes, err := cp1Runner.RunSudo(ctx, `/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get node `+cp1.Name+` -o jsonpath='{.status.nodeInfo.kubeletVersion}'`)
+	// Đọc phiên bản hiện tại của TOÀN BỘ nodes để hỗ trợ resume khi nâng cấp bị gián đoạn giữa chừng
+	verRes, err := cp1Runner.RunSudo(ctx, `/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes -o custom-columns=NAME:.metadata.name,VER:.status.nodeInfo.kubeletVersion --no-headers`)
 	if err != nil {
-		return fmt.Errorf("query current cluster version on %s: %w", cp1.Name, err)
+		return fmt.Errorf("query current cluster node versions on %s: %w", cp1.Name, err)
 	}
-	currentVer := strings.TrimSpace(curRes.Stdout)
-	if err := validateUpgradePath(currentVer, targetVer); err != nil {
-		return err
+	nodeVersions := parseNodeVersions(verRes.Stdout)
+	currentVer := nodeVersions[cp1.Name]
+	if currentVer == "" {
+		return fmt.Errorf("cannot determine current kubelet version of %s", cp1.Name)
+	}
+
+	// Cho phép resume nếu CP-1 đã lên targetVer nhưng còn node khác chưa nâng cấp
+	allAtTarget := true
+	for _, n := range cfg.Spec.Nodes {
+		if nv := nodeVersions[n.Name]; nv != "" && nv != targetVer {
+			allAtTarget = false
+			if err := validateUpgradePath(nv, targetVer); err != nil {
+				return fmt.Errorf("node %s: %w", n.Name, err)
+			}
+		}
+	}
+	if allAtTarget {
+		return fmt.Errorf("all %d node(s) in cluster %q are already running Kubernetes %s", len(cfg.Spec.Nodes), cfg.Metadata.Name, targetVer)
+	}
+
+	// Tự động backup etcd & PKI trước khi chạy upgrade (trừ khi --skip-backup)
+	if !opts.SkipBackup {
+		fmt.Fprintf(e.Out, "==> [Pre-Upgrade] Tự động sao lưu etcd & PKI trước khi nâng cấp...\n")
+		if err := e.Backup(ctx, cfg, BackupOptions{}); err != nil {
+			return fmt.Errorf("pre-upgrade etcd backup failed (pass --skip-backup to bypass): %w", err)
+		}
 	}
 
 	// Phát hiện kiến trúc CPU của cụm
@@ -106,8 +130,8 @@ rm -rf "$DL_DIR" && mkdir -p -m 0700 "$DL_DIR"
 trap 'rm -rf "$DL_DIR"' EXIT
 for bin in kubeadm kubelet kubectl; do
   URL="https://dl.k8s.io/release/%s/bin/linux/%s/$bin"
-  curl -fsSL "$URL" -o "$DL_DIR/$bin"
-  SHA="$(curl -fsSL "$URL.sha256" | awk '{print $1}')"
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$URL" -o "$DL_DIR/$bin"
+  SHA="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 "$URL.sha256" | awk '{print $1}')"
   echo "$SHA  $DL_DIR/$bin" | sha256sum -c - >/dev/null
 done
 install -m 0755 "$DL_DIR/kubeadm" /usr/local/bin/kubeadm
@@ -170,21 +194,29 @@ systemctl start kubelet`
 		return nil
 	}
 
-	// 1. Nâng cấp Primary Control Plane (CP-1)
-	fmt.Fprintf(e.Out, "  [upgrade]   %-12s chuẩn bị binaries & chạy kubeadm upgrade apply %s...\n", cp1.Name, targetVer)
-	if err := stageNodeBinaries(cp1, cp1Runner); err != nil {
-		return fmt.Errorf("stage binaries on %s: %w", cp1.Name, err)
+	// 1. Nâng cấp Primary Control Plane (CP-1) — bỏ qua nếu đang resume và CP-1 đã ở targetVer
+	if nodeVersions[cp1.Name] == targetVer {
+		fmt.Fprintf(e.Out, "  [upgrade]   %-12s đã ở %s (bỏ qua khi resume)\n", cp1.Name, targetVer)
+	} else {
+		fmt.Fprintf(e.Out, "  [upgrade]   %-12s chuẩn bị binaries & chạy kubeadm upgrade apply %s...\n", cp1.Name, targetVer)
+		if err := stageNodeBinaries(cp1, cp1Runner); err != nil {
+			return fmt.Errorf("stage binaries on %s: %w", cp1.Name, err)
+		}
+		if _, err := cp1Runner.RunSudo(ctx, fmt.Sprintf("/usr/local/bin/kubeadm upgrade apply %s -y", targetVer)); err != nil {
+			return fmt.Errorf("kubeadm upgrade apply %s on %s: %w", targetVer, cp1.Name, err)
+		}
+		if err := swapKubeletAndUncordon(cp1, cp1Runner); err != nil {
+			return err
+		}
+		fmt.Fprintf(e.Out, "  [upgrade]   %-12s OK (%s)\n", cp1.Name, targetVer)
 	}
-	if _, err := cp1Runner.RunSudo(ctx, fmt.Sprintf("/usr/local/bin/kubeadm upgrade apply %s -y", targetVer)); err != nil {
-		return fmt.Errorf("kubeadm upgrade apply %s on %s: %w", targetVer, cp1.Name, err)
-	}
-	if err := swapKubeletAndUncordon(cp1, cp1Runner); err != nil {
-		return err
-	}
-	fmt.Fprintf(e.Out, "  [upgrade]   %-12s OK (%s)\n", cp1.Name, targetVer)
 
 	// 2. Nâng cấp tuần tự Secondary Control Planes
 	for _, cp := range cps[1:] {
+		if nodeVersions[cp.Name] == targetVer {
+			fmt.Fprintf(e.Out, "  [upgrade]   %-12s đã ở %s (bỏ qua khi resume)\n", cp.Name, targetVer)
+			continue
+		}
 		r, err := pool.Get(cp.Name)
 		if err != nil {
 			return err
@@ -204,6 +236,10 @@ systemctl start kubelet`
 
 	// 3. Nâng cấp tuần tự Worker Nodes để bảo vệ PodDisruptionBudget
 	for _, wk := range workers {
+		if nodeVersions[wk.Name] == targetVer {
+			fmt.Fprintf(e.Out, "  [upgrade]   %-12s đã ở %s (bỏ qua khi resume)\n", wk.Name, targetVer)
+			continue
+		}
 		r, err := pool.Get(wk.Name)
 		if err != nil {
 			return err
@@ -274,4 +310,15 @@ func parseSemver(v string) (major, minor, patch int, err error) {
 		return 0, 0, 0, err
 	}
 	return major, minor, patch, nil
+}
+
+func parseNodeVersions(out string) map[string]string {
+	m := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 {
+			m[fields[0]] = fields[1]
+		}
+	}
+	return m
 }

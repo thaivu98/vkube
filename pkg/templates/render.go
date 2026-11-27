@@ -97,6 +97,27 @@ resources:
 `, base64Key))
 }
 
+// DefaultAuditPolicy trả về chính sách Audit cơ bản chuẩn Kubernetes (ghi Metadata cho Secrets/ConfigMaps & Request cho thay đổi quan trọng).
+func DefaultAuditPolicy() []byte {
+	return []byte(`apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - "RequestReceived"
+rules:
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps"]
+  - level: RequestResponse
+    verbs: ["create", "update", "patch", "delete"]
+    resources:
+      - group: "rbac.authorization.k8s.io"
+  - level: Metadata
+    omitStages:
+      - "RequestReceived"
+`)
+}
+
 // ClusterTemplateData chứa tham số render file cluster.yaml mẫu đầy đủ hướng dẫn.
 type ClusterTemplateData struct {
 	Arch string

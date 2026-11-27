@@ -108,23 +108,33 @@ func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targe
 	}
 
 	// Bật LAN HTTP Fan-out (BundleServer Pure Go) khi --fast-sync hoặc cụm >= 3 node để phát tán bundle cực nhanh trong LAN;
-	// nếu firewall máy Deployer chặn port HTTP, từng node sẽ tự động fallback sang SFTP an toàn.
+	// tính trước SHA256 trên máy Deployer để mỗi node xác thực toàn vẹn ngay sau khi tải HTTP (chống MITM trong LAN).
 	var (
-		zstHTTPURL   string
-		plainHTTPURL string
+		zstHTTPURL     string
+		zstExpectedSHA string
+		plainHTTPURL   string
+		plainSHA       string
 	)
 	if (state.FastSync || len(targetNodes) >= 3) && len(targetNodes) > 0 {
-		if lanIP, err := ssh.OutboundIP(targetNodes[0].Host); err == nil {
+		if sha, _, err := fileSHA256(state.BundlePath); err == nil {
+			zstExpectedSHA = sha
+		}
+		if plainTarPath != "" {
+			if sha, _, err := fileSHA256(plainTarPath); err == nil {
+				plainSHA = sha
+			}
+		}
+		if lanIP, err := ssh.OutboundIP(targetNodes[0].Host); err == nil && zstExpectedSHA != "" {
 			if srv, err := ssh.NewBundleServer(state.BundlePath); err == nil {
 				if err := srv.Start(":0"); err == nil {
 					defer srv.Shutdown(context.Background())
 					if u, err := srv.URLForHost(lanIP); err == nil {
 						zstHTTPURL = u
-						fmt.Fprintf(e.Out, "  [fast-sync] Bật LAN HTTP BundleServer (%s) để phát tán song song tới %d node(s)...\n", lanIP, len(targetNodes))
+						fmt.Fprintf(e.Out, "  [fast-sync] Bật LAN HTTP BundleServer (%s) để phát tán song song tới %d node(s) (có verify SHA256)...\n", lanIP, len(targetNodes))
 					}
 				}
 			}
-			if plainTarPath != "" {
+			if plainTarPath != "" && plainSHA != "" {
 				if srv, err := ssh.NewBundleServer(plainTarPath); err == nil {
 					if err := srv.Start(":0"); err == nil {
 						defer srv.Shutdown(context.Background())
@@ -154,22 +164,26 @@ func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targe
 		remoteArchive := "/var/tmp/vkube-bundle.tar.zst"
 		extractCmd := fmt.Sprintf("tar --zstd -xf %s -C %s", remoteArchive, remoteWorkDir)
 		httpURL := zstHTTPURL
+		expectedSHA := zstExpectedSHA
 		if !useZstd {
 			localUpload = plainTarPath
 			remoteArchive = "/var/tmp/vkube-bundle.tar"
 			extractCmd = fmt.Sprintf("tar -xf %s -C %s", remoteArchive, remoteWorkDir)
 			httpURL = plainHTTPURL
+			expectedSHA = plainSHA
 		}
 
 		syncedViaHTTP := false
-		if httpURL != "" {
-			fmt.Fprintf(e.Out, "  [artifacts] %-12s đang kéo Offline Bundle qua LAN HTTP fast-sync...\n", node.Name)
-			dlCmd := fmt.Sprintf("curl -fsSL --connect-timeout 5 %q -o %s", httpURL, remoteArchive)
+		if httpURL != "" && expectedSHA != "" {
+			fmt.Fprintf(e.Out, "  [artifacts] %-12s đang kéo Offline Bundle qua LAN HTTP fast-sync & verify SHA256...\n", node.Name)
+			dlCmd := fmt.Sprintf(`set -euo pipefail
+curl -fsSL --retry 2 --connect-timeout 5 %q -o %s
+echo "%s  %s" | sha256sum -c - >/dev/null`, httpURL, remoteArchive, expectedSHA, remoteArchive)
 			if _, err := r.RunSudo(ctx, dlCmd); err == nil {
 				syncedViaHTTP = true
 			} else {
 				_, _ = r.RunSudo(ctx, fmt.Sprintf("rm -f %s", remoteArchive))
-				fmt.Fprintf(e.Out, "  [artifacts] %-12s LAN HTTP không kết nối được (có thể do firewall), chuyển sang SFTP...\n", node.Name)
+				fmt.Fprintf(e.Out, "  [artifacts] %-12s LAN HTTP không kết nối được hoặc sai checksum, chuyển sang SFTP...\n", node.Name)
 			}
 		}
 		if !syncedViaHTTP {
@@ -197,7 +211,8 @@ func (e *Engine) runRuntimeNodes(ctx context.Context, state *ClusterState, targe
 		installScript := fmt.Sprintf(`set -euo pipefail
 USER_HOME="$(getent passwd %s | cut -d: -f6)"
 STAGE_TMP="$USER_HOME/.vkube-tmp"
-rm -rf %s && mkdir -p -m 0700 %s && mkdir -p /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d
+rm -rf %s && mkdir -p -m 0700 %s /etc/vkube && mkdir -p /usr/local/bin /opt/cni/bin %s %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d
+chmod 0700 /etc/vkube
 %s
 rm -f %s
 
@@ -306,8 +321,8 @@ func decompressZstdToTempTar(zstPath string) (string, error) {
 	return outPath, nil
 }
 
-// kubeletExtraArgsCmd dùng systemd drop-in riêng (20-vkube-node-ip.conf) thay vì ghi đè /etc/default/kubelet,
-// gắn --node-ip khi host là địa chỉ IP hợp lệ và ghép thêm spec.controlPlane.kubeletExtraArgs (nếu có).
+// kubeletExtraArgsCmd dùng systemd drop-in riêng (20-vkube-node-ip.conf) bằng heredoc an toàn
+// (tránh lỗi printf khi giá trị có ký tự '%' như imagefs.available<15% và escape '%' -> '%%' cho systemd).
 func kubeletExtraArgsCmd(host string, extraArgs map[string]string) string {
 	var args []string
 	trimmed := strings.TrimSpace(host)
@@ -322,11 +337,13 @@ func kubeletExtraArgsCmd(host string, extraArgs map[string]string) string {
 		sort.Strings(keys)
 		for _, k := range keys {
 			flagName := strings.TrimPrefix(k, "--")
-			args = append(args, fmt.Sprintf("--%s=%s", flagName, extraArgs[k]))
+			// systemd coi '%' trong unit file là specifier nên cần nhân đôi '%%'
+			val := strings.ReplaceAll(extraArgs[k], "%", "%%")
+			args = append(args, fmt.Sprintf("--%s=%s", flagName, val))
 		}
 	}
 	if len(args) > 0 {
-		return fmt.Sprintf(`printf '[Service]\nEnvironment="KUBELET_EXTRA_ARGS=%s"\n' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf`, strings.Join(args, " "))
+		return fmt.Sprintf("cat <<'VKUBE_EOF' > /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf\n[Service]\nEnvironment=\"KUBELET_EXTRA_ARGS=%s\"\nVKUBE_EOF", strings.Join(args, " "))
 	}
 	return "rm -f /etc/systemd/system/kubelet.service.d/20-vkube-node-ip.conf"
 }
@@ -357,7 +374,7 @@ func configureContainerdProxy(ctx context.Context, cfg *api.ClusterConfig, r ssh
 	cmd := fmt.Sprintf(`set -euo pipefail
 USER_HOME="$(getent passwd %s | cut -d: -f6)"
 mkdir -p /etc/systemd/system/containerd.service.d
-install -m 0644 "$USER_HOME/.vkube-tmp/containerd-proxy.conf" /etc/systemd/system/containerd.service.d/http-proxy.conf
+install -m 0600 "$USER_HOME/.vkube-tmp/containerd-proxy.conf" /etc/systemd/system/containerd.service.d/http-proxy.conf
 rm -f "$USER_HOME/.vkube-tmp/containerd-proxy.conf"`, sshUser)
 	_, err := r.RunSudo(ctx, cmd)
 	return err
@@ -380,14 +397,24 @@ func proxyShellExports(cfg *api.ClusterConfig) string {
 }
 
 // containerdConfigPatchCmd sinh lệnh cấu hình /etc/containerd/config.toml tương thích cả containerd 1.x và 2.x:
-//   - containerd 1.x dùng khóa sandbox_image = "..."
-//   - containerd 2.x (config version 3) dùng khóa sandbox = "..." trong pinned_images
+//   - containerd 1.x: sandbox_image = "..." và [plugins."io.containerd.grpc.v1.cri".registry] config_path = ""
+//   - containerd 2.x (config version 3): sandbox = '...' và [plugins.'io.containerd.cri.v1.images'.registry] config_path = ”
+//
+// Chỉ vá config_path bên trong section CRI registry, TUYỆT ĐỐI không đụng vào [plugins.'io.containerd.transfer.v1.local'].
 func containerdConfigPatchCmd(sandboxImage string) string {
 	return fmt.Sprintf(`/usr/local/bin/containerd config default > /etc/containerd/config.toml
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
 sed -i 's|sandbox_image = ".*"|sandbox_image = "%s"|g' /etc/containerd/config.toml
 sed -i -E "s|^([[:space:]]*sandbox = )['\"].*['\"]|\1'%s'|g" /etc/containerd/config.toml
-sed -i 's|config_path = ""|config_path = "/etc/containerd/certs.d"|g' /etc/containerd/config.toml`, sandboxImage, sandboxImage)
+awk '
+  /^\[/ {
+    in_cri_reg = ($0 ~ /io\.containerd\.(cri\.v1\.images|grpc\.v1\.cri).*\.registry\]/)
+  }
+  in_cri_reg && /^[[:space:]]*config_path[[:space:]]*=[[:space:]]*('\'''\''|"")/ {
+    sub(/('\'''\''|"")/, "\"/etc/containerd/certs.d\"")
+  }
+  { print }
+' /etc/containerd/config.toml > /etc/containerd/config.toml.vkube && mv -f /etc/containerd/config.toml.vkube /etc/containerd/config.toml`, sandboxImage, sandboxImage)
 }
 
 // runRuntimeOnlineNodes tải trực tiếp binaries & manifests song song trên từng node,
@@ -427,7 +454,8 @@ func (e *Engine) runRuntimeOnlineNodes(ctx context.Context, state *ClusterState,
 		dlCmds = append(dlCmds, fmt.Sprintf(`USER_HOME="$(getent passwd %s | cut -d: -f6)"
 STAGE_TMP="$USER_HOME/.vkube-tmp"
 DL_DIR="/var/lib/vkube/online-dl"
-rm -rf "$DL_DIR" && mkdir -p -m 0700 "$DL_DIR"
+rm -rf "$DL_DIR" && mkdir -p -m 0700 "$DL_DIR" /etc/vkube
+chmod 0700 /etc/vkube
 mkdir -p /usr/local/bin /opt/cni/bin %s /etc/containerd /etc/containerd/certs.d /etc/systemd/system/kubelet.service.d
 
 verify_sha256() {
@@ -435,7 +463,7 @@ verify_sha256() {
   local sha_url="$2"
   local fname="$3"
   local expected
-  expected="$(curl -fsSL "$sha_url" | awk -v f="$fname" '{
+  expected="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 "$sha_url" | awk -v f="$fname" '{
     gsub(/^\*/, "", $2);
     if ($2 == f || $2 == "./" f) { print $1; exit }
     if (first == "" && length($1) == 64) first = $1
@@ -453,7 +481,7 @@ verify_sha256() {
 			switch art.Type {
 			case versions.ArtifactTypeBinary:
 				destPath := path.Join("/usr/local/bin", path.Base(art.Dest))
-				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 %q -o %s", art.URL, dlTarget))
 				if art.SHA256 != "" {
 					dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
 				} else if art.SHA256URL != "" {
@@ -461,7 +489,7 @@ verify_sha256() {
 				}
 				dlCmds = append(dlCmds, fmt.Sprintf("install -m 0755 %s %q && rm -f %s", dlTarget, destPath, dlTarget))
 			case versions.ArtifactTypeTarball:
-				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+				dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 %q -o %s", art.URL, dlTarget))
 				if art.SHA256 != "" {
 					dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
 				} else if art.SHA256URL != "" {
@@ -480,7 +508,7 @@ verify_sha256() {
 			case versions.ArtifactTypeManifest:
 				if node.Role == api.RoleControlPlane {
 					destPath := path.Join(remoteManifestDir, path.Base(art.Dest))
-					dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL %q -o %s", art.URL, dlTarget))
+					dlCmds = append(dlCmds, fmt.Sprintf("curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 %q -o %s", art.URL, dlTarget))
 					if art.SHA256 != "" {
 						dlCmds = append(dlCmds, fmt.Sprintf(`echo "%s  %s" | sha256sum -c - >/dev/null`, art.SHA256, strings.Trim(dlTarget, `"`)))
 					} else if art.SHA256URL != "" {

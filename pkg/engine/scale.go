@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -169,10 +170,31 @@ EOF`, hostsMarkerStart, hostsMarkerEnd, hostsBlock))
 		}
 
 		fmt.Fprintf(e.Out, "==> Join %d Control Plane mới (tuần tự để bảo vệ etcd Raft)...\n", len(newCPs))
+
+		// Nếu CP-1 đang bật mã hóa Secret trong etcd (/etc/kubernetes/enc/encryption-config.yaml),
+		// bắt buộc đồng bộ nguyên file khóa sang Control Plane mới TRƯỚC khi kubeadm join.
+		var encConfigBytes []byte
+		if encRes, err := cp1Client.RunSudo(ctx, "if [ -f /etc/kubernetes/enc/encryption-config.yaml ]; then cat /etc/kubernetes/enc/encryption-config.yaml; fi"); err == nil && strings.TrimSpace(encRes.Stdout) != "" {
+			encConfigBytes = []byte(encRes.Stdout)
+		}
+
 		for _, cp := range newCPs {
 			r, err := pool.Get(cp.Name)
 			if err != nil {
 				return err
+			}
+			if len(encConfigBytes) > 0 {
+				if err := r.WriteFile(ctx, encConfigBytes, ".vkube-tmp/encryption-config.yaml", 0o600); err != nil {
+					return fmt.Errorf("upload encryption-config.yaml to %s: %w", cp.Name, err)
+				}
+				u := cfg.EffectiveSSH(cp).User
+				if _, err := r.RunSudo(ctx, fmt.Sprintf(`set -euo pipefail
+USER_HOME="$(getent passwd %s | cut -d: -f6)"
+mkdir -p -m 0700 /etc/kubernetes/enc
+install -m 0600 "$USER_HOME/.vkube-tmp/encryption-config.yaml" /etc/kubernetes/enc/encryption-config.yaml
+rm -f "$USER_HOME/.vkube-tmp/encryption-config.yaml"`, u)); err != nil {
+					return fmt.Errorf("install encryption-config.yaml on %s: %w", cp.Name, err)
+				}
 			}
 			joinYAML, err := templates.RenderKubeadmJoin(templates.KubeadmJoinData{
 				APIServerEndpoint:        endpoint,
@@ -181,7 +203,7 @@ EOF`, hostsMarkerStart, hostsMarkerEnd, hostsBlock))
 				NodeName:                 cp.Name,
 				ImagePullPolicy:          pullPolicy,
 				IsControlPlane:           true,
-				AdvertiseAddress:         cp.Host,
+				AdvertiseAddress:         cp.EffectiveNodeIP(),
 				CertificateKey:           certKey,
 			})
 			if err != nil {
@@ -298,11 +320,17 @@ func (e *Engine) RemoveNode(ctx context.Context, cfg *api.ClusterConfig, opts Re
 
 	fmt.Fprintf(e.Out, "==> Đang gỡ node %q khỏi cụm %q (điều phối qua %s)...\n", targetName, cfg.Metadata.Name, activeCP.Name)
 
-	// 1. Drain node an toàn
-	fmt.Fprintf(e.Out, "  [drain]     Đang di tản toàn bộ Pod trên %s...\n", targetName)
-	drainCmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf drain %s --ignore-daemonsets --delete-emptydir-data --force --timeout=120s", targetName)
-	if _, err := cpClient.RunSudo(ctx, drainCmd); err != nil {
-		return fmt.Errorf("drain node %s: %w", targetName, err)
+	// 1. Drain node an toàn (khi --skip-reset cho máy đã hỏng phần cứng, không chặn nếu drain lỗi)
+	if opts.SkipReset {
+		fmt.Fprintf(e.Out, "  [drain]     --skip-reset đang bật: cố gắng drain nhanh %s (bỏ qua nếu node đã chết)...\n", targetName)
+		drainCmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf drain %s --ignore-daemonsets --delete-emptydir-data --force --timeout=30s || true", targetName)
+		_, _ = cpClient.RunSudo(ctx, drainCmd)
+	} else {
+		fmt.Fprintf(e.Out, "  [drain]     Đang di tản toàn bộ Pod trên %s...\n", targetName)
+		drainCmd := fmt.Sprintf("/usr/local/bin/kubectl --kubeconfig /etc/kubernetes/admin.conf drain %s --ignore-daemonsets --delete-emptydir-data --force --timeout=120s", targetName)
+		if _, err := cpClient.RunSudo(ctx, drainCmd); err != nil {
+			return fmt.Errorf("drain node %s: %w", targetName, err)
+		}
 	}
 
 	// 2. Nếu là Control Plane, kiểm tra tác động quorum & gỡ etcd member ra khỏi Raft quorum trước khi xóa node
@@ -404,7 +432,15 @@ func isHexString(s string) bool {
 	return len(s) > 0
 }
 
+// parseEtcdMemberID tìm đúng member ID trong output của `etcdctl member list`:
+// ưu tiên khớp chính xác tên node trước, sau đó mới so khớp CHÍNH XÁC hostname/IP từ peerURL (không dùng strings.Contains tránh 10.0.0.1 khớp nhầm 10.0.0.12).
 func parseEtcdMemberID(memberListOut, nodeName, nodeHost string) string {
+	type entry struct {
+		id      string
+		name    string
+		peerURL string
+	}
+	var entries []entry
 	for _, line := range strings.Split(memberListOut, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -414,11 +450,26 @@ func parseEtcdMemberID(memberListOut, nodeName, nodeHost string) string {
 		if len(parts) < 4 {
 			continue
 		}
-		id := strings.TrimSpace(parts[0])
-		name := strings.TrimSpace(parts[2])
-		peerURL := strings.TrimSpace(parts[3])
-		if name == nodeName || (nodeHost != "" && strings.Contains(peerURL, nodeHost)) {
-			return id
+		entries = append(entries, entry{
+			id:      strings.TrimSpace(parts[0]),
+			name:    strings.TrimSpace(parts[2]),
+			peerURL: strings.TrimSpace(parts[3]),
+		})
+	}
+	// Pass 1: Khớp chính xác theo tên member
+	if nodeName != "" {
+		for _, e := range entries {
+			if e.name == nodeName {
+				return e.id
+			}
+		}
+	}
+	// Pass 2: Khớp chính xác theo hostname/IP sau khi parse URL
+	if nodeHost != "" {
+		for _, e := range entries {
+			if u, err := url.Parse(e.peerURL); err == nil && u.Hostname() == nodeHost {
+				return e.id
+			}
 		}
 	}
 	return ""
